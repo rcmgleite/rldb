@@ -21,15 +21,16 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
     let args = Cli::parse();
 
     match args.command {
         Commands::Ping { port } => {
             let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
             let response = client.ping().await?;
-
             let mut stdout = tokio::io::stdout();
-            stdout.write_all(&response).await?;
+            let payload = serde_json::to_string(&response)?;
+            stdout.write_all(payload.as_bytes()).await?;
         }
     }
 

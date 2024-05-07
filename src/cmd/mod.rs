@@ -1,14 +1,19 @@
 pub mod ping;
 
 use anyhow::anyhow;
-use std::fmt::Debug;
+use bytes::Bytes;
+use serde::Serialize;
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, BufStream},
+    io::{AsyncBufRead, AsyncWrite, BufStream},
     net::TcpStream,
 };
+use tracing::{event, Level};
 
-use self::ping::CMD_NAME as PING_CMD_NAME;
+use crate::server::{Message, Response};
 
+use self::ping::PING_CMD;
+
+// TODO: remove
 pub trait AsyncBufReadWrite: AsyncBufRead + AsyncWrite + Send + Unpin {}
 impl AsyncBufReadWrite for BufStream<TcpStream> {}
 
@@ -17,34 +22,25 @@ pub enum Command {
 }
 
 impl Command {
-    pub async fn execute<RW>(self, stream: &mut RW) -> anyhow::Result<()>
-    where
-        RW: AsyncBufReadWrite,
-    {
-        match self {
-            Command::Ping(cmd) => cmd.execute(stream).await,
+    pub async fn execute(self) -> Response {
+        let response_payload = match self {
+            Command::Ping(cmd) => cmd.execute().await,
+        };
+
+        Response::new(PING_CMD, response_payload)
+    }
+
+    pub async fn try_from_message(message: Message) -> anyhow::Result<Command> {
+        event!(Level::DEBUG, "trying to parse cmd: {}", message.id);
+        match message.id {
+            PING_CMD => Ok(Command::Ping(ping::Ping)),
+            _ => {
+                return Err(anyhow!("Unrecognized command: {}", message.id));
+            }
         }
     }
 
-    pub async fn try_from_buf_read<R>(reader: &mut R) -> anyhow::Result<Command>
-    where
-        R: AsyncBufRead + Unpin + Debug,
-    {
-        loop {
-            let buf = reader.fill_buf().await?;
-
-            if buf.is_empty() {
-                return Err(anyhow!(
-                    "Unable to construct valid command from the provided reader {:?}",
-                    reader
-                ));
-            }
-
-            if buf.starts_with(&PING_CMD_NAME) {
-                return Ok(Command::Ping(
-                    ping::Ping::try_from_async_read(reader).await?,
-                ));
-            }
-        }
+    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Bytes {
+        Bytes::from(serde_json::to_string(&payload).unwrap())
     }
 }

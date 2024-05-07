@@ -1,31 +1,32 @@
-use bytes::Bytes;
 use tokio::{
-    io::{AsyncWriteExt, BufStream},
+    io::AsyncWriteExt,
     net::{TcpStream, ToSocketAddrs},
 };
 
-use crate::cmd;
+use crate::{
+    cmd::{self, ping::PingResponse, ping::PING_CMD},
+    server::Message,
+};
 
 pub struct DbClient {
-    stream: BufStream<TcpStream>,
+    stream: TcpStream,
 }
 
 impl DbClient {
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> anyhow::Result<Self> {
         Ok(Self {
-            stream: BufStream::new(TcpStream::connect(addr).await?),
+            stream: TcpStream::connect(addr).await?,
         })
     }
 
-    pub async fn ping(&mut self) -> anyhow::Result<Bytes> {
+    pub async fn ping(&mut self) -> anyhow::Result<PingResponse> {
         let ping_cmd = cmd::ping::Ping;
-        let serialized = ping_cmd.serialize();
+        let msg = Message::serialize(ping_cmd);
 
-        self.stream.write_all(&serialized).await?;
-        self.stream.flush().await?;
+        self.stream.write_all(&msg).await?;
 
-        let response = cmd::ping::Ping::parse_response(&mut self.stream).await?;
-
-        Ok(response)
+        let response = Message::try_from_async_read(&mut self.stream).await?;
+        assert_eq!(response.id, PING_CMD);
+        Ok(serde_json::from_slice(&response.payload.unwrap())?)
     }
 }
