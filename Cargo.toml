@@ -1,0 +1,22 @@
+[package]
+name = "rldb"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rldb-server"
+path = "src/bin/db_server.rs"
+
+[[bin]]
+name = "rldb-client"
+path = "src/bin/db_client.rs"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+bytes = "1.6"
+clap = {version = "4.5", features = ["derive"]}
+hex = "0.4"
+tokio = {version = "1.35", features = ["full"]}
+tracing = "0.1"
+tracing-subscriber = "0.3"
