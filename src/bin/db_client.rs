@@ -3,6 +3,8 @@ use rldb::client::DbClient;
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Parser)]
+#[command(name = "rldb-client")]
+#[command(about = "rldb-client tcp client", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
