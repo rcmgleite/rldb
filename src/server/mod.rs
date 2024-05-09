@@ -19,10 +19,11 @@ use tokio::{
 };
 use tracing::{event, instrument, Level};
 
-use crate::cmd::Command;
+use crate::{cmd::Command, storage_engine::StorageEngine};
 
-struct Listener {
+struct Listener<S: StorageEngine> {
     listener: TcpListener,
+    storage_engine: S,
 }
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
@@ -86,7 +87,7 @@ impl Message {
     }
 }
 
-impl Listener {
+impl<S: StorageEngine + Send + 'static> Listener<S> {
     async fn run(&self) -> anyhow::Result<()> {
         event!(Level::INFO, "Listener started");
 
@@ -97,7 +98,8 @@ impl Listener {
                 "accepted new tcp connection: {:?}",
                 tcp_stream
             );
-            tokio::spawn(handle_connection(tcp_stream));
+            let storage_engine = self.storage_engine.clone();
+            tokio::spawn(handle_connection(tcp_stream, storage_engine));
         }
     }
 }
@@ -133,11 +135,14 @@ pub trait IntoRequest {
 }
 
 #[instrument(level = "debug")]
-async fn handle_connection(mut tcp_stream: TcpStream) -> anyhow::Result<()> {
+async fn handle_connection<S: StorageEngine>(
+    mut tcp_stream: TcpStream,
+    storage_engine: S,
+) -> anyhow::Result<()> {
     loop {
         let message = Message::try_from_async_read(&mut tcp_stream).await?;
-        let cmd = Command::try_from_message(message).await?;
-        let response = cmd.execute().await.serialize();
+        let cmd = Command::try_from_message(message)?;
+        let response = cmd.execute(storage_engine.clone()).await.serialize();
 
         event!(Level::DEBUG, "going to write response: {:?}", response);
 
@@ -145,7 +150,13 @@ async fn handle_connection(mut tcp_stream: TcpStream) -> anyhow::Result<()> {
     }
 }
 
-pub async fn run(listener: TcpListener) -> anyhow::Result<()> {
-    let server = Listener { listener };
+pub async fn run<S: StorageEngine + Send + 'static>(
+    listener: TcpListener,
+    storage_engine: S,
+) -> anyhow::Result<()> {
+    let server = Listener {
+        listener,
+        storage_engine,
+    };
     server.run().await
 }

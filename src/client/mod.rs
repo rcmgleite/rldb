@@ -4,7 +4,11 @@ use tokio::{
 };
 
 use crate::{
-    cmd::{self, ping::PingResponse, ping::PING_CMD},
+    cmd::{
+        self,
+        get::{GetResponse, GET_CMD},
+        ping::{PingResponse, PING_CMD},
+    },
     server::Message,
 };
 
@@ -27,6 +31,17 @@ impl DbClient {
 
         let response = Message::try_from_async_read(&mut self.stream).await?;
         assert_eq!(response.id, PING_CMD);
+        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+    }
+
+    pub async fn get(&mut self, key: String) -> anyhow::Result<GetResponse> {
+        let get_cmd = cmd::get::Get::new(key);
+        let msg = Message::serialize(get_cmd);
+
+        self.stream.write_all(&msg).await?;
+
+        let response = Message::try_from_async_read(&mut self.stream).await?;
+        assert_eq!(response.id, GET_CMD);
         Ok(serde_json::from_slice(&response.payload.unwrap())?)
     }
 }

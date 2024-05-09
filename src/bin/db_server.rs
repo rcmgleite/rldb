@@ -1,5 +1,5 @@
 use clap::Parser;
-use rldb::server::run;
+use rldb::{server::run, storage_engine::in_memory::InMemory};
 use tokio::net::TcpListener;
 
 #[derive(Debug, Parser)]
@@ -15,8 +15,9 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Cli::parse();
 
+    let storage_engine = InMemory::default();
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    run(listener).await?;
+    run(listener, storage_engine).await?;
 
     Ok(())
 }

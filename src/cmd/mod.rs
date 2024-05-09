@@ -1,4 +1,6 @@
+pub mod get;
 pub mod ping;
+pub mod put;
 
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -9,9 +11,12 @@ use tokio::{
 };
 use tracing::{event, Level};
 
-use crate::server::{Message, Response};
-
-use self::ping::PING_CMD;
+use crate::{
+    cmd::get::GET_CMD,
+    cmd::ping::PING_CMD,
+    server::{Message, Response},
+    storage_engine::StorageEngine,
+};
 
 // TODO: remove
 pub trait AsyncBufReadWrite: AsyncBufRead + AsyncWrite + Send + Unpin {}
@@ -19,21 +24,30 @@ impl AsyncBufReadWrite for BufStream<TcpStream> {}
 
 pub enum Command {
     Ping(ping::Ping),
+    Get(get::Get),
 }
 
 impl Command {
-    pub async fn execute(self) -> Response {
-        let response_payload = match self {
-            Command::Ping(cmd) => cmd.execute().await,
-        };
+    pub async fn execute<S: StorageEngine>(self, storage_engine: S) -> Response {
+        match self {
+            Command::Ping(cmd) => {
+                let payload = cmd.execute().await;
 
-        Response::new(PING_CMD, response_payload)
+                Response::new(PING_CMD, Self::serialize_response_payload(payload))
+            }
+            Command::Get(cmd) => {
+                let payload = cmd.execute(storage_engine).await;
+
+                Response::new(GET_CMD, Self::serialize_response_payload(payload))
+            }
+        }
     }
 
-    pub async fn try_from_message(message: Message) -> anyhow::Result<Command> {
+    pub fn try_from_message(message: Message) -> anyhow::Result<Command> {
         event!(Level::DEBUG, "trying to parse cmd: {}", message.id);
         match message.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
+            GET_CMD => Ok(Command::Get(get::Get::try_from_message(message)?)),
             _ => {
                 return Err(anyhow!("Unrecognized command: {}", message.id));
             }

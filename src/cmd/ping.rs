@@ -3,17 +3,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::IntoRequest;
 
-use super::Command;
-
 pub const PING_CMD: u32 = 1;
 
 pub struct Ping;
 
 impl Ping {
-    pub async fn execute(self) -> Bytes {
-        Command::serialize_response_payload(PingResponse {
+    pub async fn execute(self) -> PingResponse {
+        PingResponse {
             message: "PONG".to_string(),
-        })
+        }
     }
 }
 
