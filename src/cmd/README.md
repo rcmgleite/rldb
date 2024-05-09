@@ -6,10 +6,22 @@ As a first draft, commands know how to serialize and serialize themselves (so th
 
 ## Commands
 
-### Ping
+### Ping (implemented)
+Sends a TCP PING request and receives a PONG response
 
-### Get(key: Bytes)
+### Get(key: Bytes) (implemented)
+Retrives the value associated with the given key (if it exists)
 
-### Put(key: Bytes, value: Bytes)
+### Put(key: Bytes, value: Bytes) (implemented)
+Stores the provided key/value pair
 
-### Delete(key: Bytes)
+### Delete(key: Bytes) (TODO)
+Deletes the value associated with the given key (if it exists)
+
+### ReplicaOf(master_ip) (TODO)
+Transforms the current node in a replica of the target node
+
+### Sync (replication_offset) (TODO)
+Used by ReplicaOf -> the replica node sends a Sync request to the target master
+and from that point onwards, all mutations applied to the master are automatically propagated to the
+replica node
