@@ -53,11 +53,11 @@ impl Get {
 }
 
 impl IntoRequest for Get {
-    fn cmd(&self) -> u32 {
+    fn id(&self) -> u32 {
         GET_CMD
     }
 
-    fn into_request(self) -> Option<Bytes> {
+    fn payload(self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(&self).unwrap()))
     }
 }

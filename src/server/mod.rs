@@ -69,17 +69,17 @@ impl Message {
     }
 
     pub fn serialize<T: IntoRequest>(value: T) -> Bytes {
-        let cmd = value.cmd();
-        event!(Level::DEBUG, "Will serialize cmd: {}", cmd);
+        let id = value.id();
+        event!(Level::DEBUG, "Will serialize cmd: {}", id);
         let mut buf;
-        if let Some(message) = value.into_request() {
-            buf = BytesMut::with_capacity(message.len() + 2 * size_of::<u32>());
-            buf.put_u32(cmd);
-            buf.put_u32(message.len() as u32);
-            buf.put(message);
+        if let Some(payload) = value.payload() {
+            buf = BytesMut::with_capacity(payload.len() + 2 * size_of::<u32>());
+            buf.put_u32(id);
+            buf.put_u32(payload.len() as u32);
+            buf.put(payload);
         } else {
             buf = BytesMut::with_capacity(2 * size_of::<u32>());
-            buf.put_u32(cmd);
+            buf.put_u32(id);
             buf.put_u32(0);
         };
 
@@ -130,8 +130,8 @@ impl Response {
 }
 
 pub trait IntoRequest {
-    fn cmd(&self) -> u32;
-    fn into_request(self) -> Option<Bytes>;
+    fn id(&self) -> u32;
+    fn payload(self) -> Option<Bytes>;
 }
 
 #[instrument(level = "debug")]

@@ -32,12 +32,10 @@ impl Command {
         match self {
             Command::Ping(cmd) => {
                 let payload = cmd.execute().await;
-
                 Response::new(PING_CMD, Self::serialize_response_payload(payload))
             }
             Command::Get(cmd) => {
                 let payload = cmd.execute(storage_engine).await;
-
                 Response::new(GET_CMD, Self::serialize_response_payload(payload))
             }
         }

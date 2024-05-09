@@ -16,11 +16,11 @@ impl Ping {
 }
 
 impl IntoRequest for Ping {
-    fn cmd(&self) -> u32 {
+    fn id(&self) -> u32 {
         PING_CMD
     }
 
-    fn into_request(self) -> Option<Bytes> {
+    fn payload(self) -> Option<Bytes> {
         None
     }
 }
