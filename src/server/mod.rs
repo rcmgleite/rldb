@@ -43,13 +43,6 @@ pub struct Request {
     pub payload: Option<Bytes>,
 }
 
-pub trait IntoRequest: Serialize {
-    fn id(&self) -> u32;
-    fn payload(&self) -> Option<Bytes> {
-        None
-    }
-}
-
 impl Request {
     pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> anyhow::Result<Self> {
         let id = reader.read_u32().await?;
@@ -78,6 +71,14 @@ impl Request {
     }
 }
 
+/// Trait used so that specific serialization protocls can be implemented by the Message consumers
+pub trait IntoRequest: Serialize {
+    fn id(&self) -> u32;
+    fn payload(&self) -> Option<Bytes> {
+        None
+    }
+}
+
 impl Request {
     pub fn serialize<T: IntoRequest>(value: T) -> Bytes {
         let id = value.id();
@@ -98,23 +99,7 @@ impl Request {
     }
 }
 
-impl<S: StorageEngine + Send + 'static> Listener<S> {
-    async fn run(&self) -> anyhow::Result<()> {
-        event!(Level::INFO, "Listener started");
-
-        loop {
-            let (tcp_stream, _) = self.listener.accept().await?;
-            event!(
-                Level::DEBUG,
-                "accepted new tcp connection: {:?}",
-                tcp_stream
-            );
-            let storage_engine = self.storage_engine.clone();
-            tokio::spawn(handle_connection(tcp_stream, storage_engine));
-        }
-    }
-}
-
+/// Similar to [`Request`], [`Response`] is also agnostic to the payload serialization format
 #[derive(Debug)]
 pub struct Response {
     id: u32,
@@ -137,6 +122,23 @@ impl Response {
         buf.put(payload.clone());
 
         buf.freeze()
+    }
+}
+
+impl<S: StorageEngine + Send + 'static> Listener<S> {
+    async fn run(&self) -> anyhow::Result<()> {
+        event!(Level::INFO, "Listener started");
+
+        loop {
+            let (tcp_stream, _) = self.listener.accept().await?;
+            event!(
+                Level::DEBUG,
+                "accepted new tcp connection: {:?}",
+                tcp_stream
+            );
+            let storage_engine = self.storage_engine.clone();
+            tokio::spawn(handle_connection(tcp_stream, storage_engine));
+        }
     }
 }
 
