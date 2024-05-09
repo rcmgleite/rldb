@@ -3,7 +3,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    server::{IntoRequest, Message},
+    server::{IntoRequest, Request},
     storage_engine::StorageEngine,
 };
 
@@ -34,16 +34,16 @@ impl Get {
         }
     }
 
-    pub fn try_from_message(message: Message) -> anyhow::Result<Self> {
-        if message.id != GET_CMD {
+    pub fn try_from_request(request: Request) -> anyhow::Result<Self> {
+        if request.id != GET_CMD {
             return Err(anyhow!(
-                "Unable to construct Get Command from Message. Expected id {} got {}",
+                "Unable to construct Get Command from Request. Expected id {} got {}",
                 GET_CMD,
-                message.id
+                request.id
             ));
         }
 
-        if let Some(payload) = message.payload {
+        if let Some(payload) = request.payload {
             let s: Self = serde_json::from_slice(&payload)?;
             Ok(s)
         } else {
@@ -57,8 +57,8 @@ impl IntoRequest for Get {
         GET_CMD
     }
 
-    fn payload(self) -> Option<Bytes> {
-        Some(Bytes::from(serde_json::to_string(&self).unwrap()))
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
     }
 }
 

@@ -1,10 +1,10 @@
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::server::IntoRequest;
 
 pub const PING_CMD: u32 = 1;
 
+#[derive(Serialize)]
 pub struct Ping;
 
 impl Ping {
@@ -18,10 +18,6 @@ impl Ping {
 impl IntoRequest for Ping {
     fn id(&self) -> u32 {
         PING_CMD
-    }
-
-    fn payload(self) -> Option<Bytes> {
-        None
     }
 }
 

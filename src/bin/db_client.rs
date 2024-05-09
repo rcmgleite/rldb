@@ -25,6 +25,17 @@ enum Commands {
         #[arg(short)]
         key: String,
     },
+    #[command()]
+    Put {
+        #[arg(short)]
+        port: u16,
+
+        #[arg(short)]
+        key: String,
+
+        #[arg(short)]
+        value: String,
+    },
 }
 
 #[tokio::main]
@@ -43,6 +54,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Get { port, key } => {
             let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
             let response = client.get(key).await?;
+            let mut stdout = tokio::io::stdout();
+            let payload = serde_json::to_string(&response)?;
+            stdout.write_all(payload.as_bytes()).await?;
+        }
+        Commands::Put { port, key, value } => {
+            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let response = client.put(key, value).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;
