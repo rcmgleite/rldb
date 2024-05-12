@@ -1,17 +1,12 @@
 use anyhow::anyhow;
+use bytes::Bytes;
 use murmur3::murmur3_x86_128;
 use std::io::Cursor;
 
 /// Let's force the usage of Hash functions that return u128 for now..
 type HashFunctionReturnType = u128;
 
-/// Currently a Node is identified by a single addrs.
-///  1. This struct likely do not belong in this module
-///  2. when we have vnodes this structure might include more stuff
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Node {
-    addr: String,
-}
+pub type ConsistentHashKey = Bytes;
 
 /// ConsistentHashing is one of the partitioning schemes implemented for rldb.
 /// The goal of consistent hashing is to enable a distributed system to decide
@@ -41,11 +36,21 @@ pub struct Node {
 ///     byte slice that we want to hash to be passed at once (and therefore loaded into memory).
 ///     Usually Hasher APIs include an `update` and a `finalize` in order to be able to handle streaming data.
 ///     Since we are going to hash fairly small byte slices here (usually an ip/port) pair, this is not a problem.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConsistentHashing {
-    nodes: Vec<Node>,
+    nodes: Vec<ConsistentHashKey>,
     keys: Vec<HashFunctionReturnType>,
     hash_fn: fn(&[u8]) -> HashFunctionReturnType,
+}
+
+impl Default for ConsistentHashing {
+    fn default() -> Self {
+        Self {
+            nodes: Default::default(),
+            keys: Default::default(),
+            hash_fn: murmur3_hash,
+        }
+    }
 }
 
 impl ConsistentHashing {
@@ -58,8 +63,8 @@ impl ConsistentHashing {
     }
 
     /// Adds a new node to the hash ring
-    pub fn add_node(&mut self, node: Node) -> anyhow::Result<HashFunctionReturnType> {
-        let node_hash = (self.hash_fn)(node.addr.as_bytes());
+    pub fn add_node(&mut self, node: Bytes) -> anyhow::Result<HashFunctionReturnType> {
+        let node_hash = (self.hash_fn)(&node);
         match self.keys.binary_search(&node_hash) {
             Ok(_) =>return Err(anyhow!("ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...")),
             Err(index) => {
@@ -71,8 +76,8 @@ impl ConsistentHashing {
     }
 
     /// Removes an existing node from the hash ring
-    pub fn remove_node(&mut self, node: Node) {
-        let node_hash = (self.hash_fn)(node.addr.as_bytes());
+    pub fn remove_node(&mut self, node: &[u8]) {
+        let node_hash = (self.hash_fn)(node);
         if let Ok(index) = self.keys.binary_search(&node_hash) {
             self.keys.remove(index);
             self.nodes.remove(index);
@@ -81,7 +86,7 @@ impl ConsistentHashing {
 
     /// Finds the owner [`Node`] of a given key
     /// Returns an error if the current ConsistentHash instance doesn't have at least one [`Node`]
-    pub fn key_owner(&self, key: &[u8]) -> anyhow::Result<Node> {
+    pub fn key_owner(&self, key: &[u8]) -> anyhow::Result<ConsistentHashKey> {
         if self.nodes.is_empty() {
             return Err(anyhow!("Can't ask for owner if no nodes are present"));
         }
@@ -90,16 +95,6 @@ impl ConsistentHashing {
         let index = self.keys.partition_point(|elem| *elem < key_hash) % self.nodes.len();
 
         Ok(self.nodes[index].clone())
-    }
-}
-
-impl Default for ConsistentHashing {
-    fn default() -> Self {
-        Self {
-            nodes: Default::default(),
-            keys: Default::default(),
-            hash_fn: murmur3_hash,
-        }
     }
 }
 
@@ -113,14 +108,20 @@ pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
 #[cfg(test)]
 mod tests {
     use super::ConsistentHashing;
-    use crate::cluster::partitioning::{murmur3_hash, HashFunctionReturnType, Node};
+    use crate::cluster::consistent_hashing::{murmur3_hash, HashFunctionReturnType};
+    use bytes::Bytes;
     use quickcheck::{quickcheck, Arbitrary};
     use rand::{distributions::Alphanumeric, Rng};
     use std::{collections::HashMap, ops::Range};
 
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct TestNode {
+        addr: Bytes,
+    }
+
     #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
     struct AddNodeTestInput {
-        nodes: Vec<Node>,
+        nodes: Vec<TestNode>,
     }
 
     fn generate_random_ascii_string(range_size: Range<usize>) -> String {
@@ -132,12 +133,12 @@ mod tests {
             .collect()
     }
 
-    fn generate_random_nodes(range: Range<usize>) -> Vec<Node> {
+    fn generate_random_nodes(range: Range<usize>) -> Vec<TestNode> {
         let n_nodes = rand::thread_rng().gen_range(range);
         let mut nodes = Vec::with_capacity(n_nodes);
         for _ in 0..n_nodes {
-            nodes.push(Node {
-                addr: generate_random_ascii_string(10..20),
+            nodes.push(TestNode {
+                addr: Bytes::from(generate_random_ascii_string(10..20)),
             })
         }
         nodes.sort();
@@ -155,10 +156,10 @@ mod tests {
         keys
     }
 
-    impl Arbitrary for Node {
+    impl Arbitrary for TestNode {
         fn arbitrary(_: &mut quickcheck::Gen) -> Self {
             Self {
-                addr: generate_random_ascii_string(1..20),
+                addr: Bytes::from(generate_random_ascii_string(1..20)),
             }
         }
     }
@@ -180,17 +181,14 @@ mod tests {
     fn test_add_nodes_randomized(test_input: AddNodeTestInput) {
         let mut ring = ConsistentHashing::default();
 
-        let node_hash_mapping: HashMap<HashFunctionReturnType, String> = test_input
+        let node_hash_mapping: HashMap<HashFunctionReturnType, Bytes> = test_input
             .nodes
             .iter()
-            .map(|elem| (murmur3_hash(elem.addr.as_bytes()), elem.addr.clone()))
+            .map(|elem| (murmur3_hash(&elem.addr), elem.addr.clone()))
             .collect();
 
         for node in test_input.nodes.iter() {
-            ring.add_node(Node {
-                addr: node.addr.clone(),
-            })
-            .unwrap();
+            ring.add_node(node.addr.clone()).unwrap();
         }
 
         // now compute the hashes manually, construct a vector and sort it.
@@ -198,7 +196,7 @@ mod tests {
         let mut nodes_key: Vec<HashFunctionReturnType> = test_input
             .nodes
             .iter()
-            .map(|e| murmur3_hash(e.addr.as_bytes()))
+            .map(|e| murmur3_hash(&e.addr))
             .collect();
         nodes_key.sort();
 
@@ -208,14 +206,15 @@ mod tests {
         assert_eq!(ring.nodes.len(), test_input.nodes.len());
 
         // now make sure that the ring.keys and ring.nodes are synchronized
-        for i in 0..ring.keys.len() {
-            assert_eq!(node_hash_mapping[&ring.keys[i]], ring.nodes[i].addr);
+        // AND that they contain all nodes provided by test_input
+        for i in 0..test_input.nodes.len() {
+            assert_eq!(node_hash_mapping[&ring.keys[i]], ring.nodes[i]);
         }
     }
 
     #[derive(Debug, Clone)]
     struct KeyOwnerTestInput {
-        nodes: Vec<Node>,
+        nodes: Vec<TestNode>,
         keys: Vec<String>,
     }
 
@@ -228,14 +227,14 @@ mod tests {
         }
     }
 
-    // TODO: Assert the key_owner return..
-    // currently we just make sure that no crashes happen (eg: overflow)
+    // Randomized inputs - here we are simply trying to see if there are
+    // edge cases that might crash the application or return unexpected errors
     #[quickcheck]
     fn test_key_owner_randomized(test_input: KeyOwnerTestInput) {
         let mut ring = ConsistentHashing::default();
 
         for node in test_input.nodes.iter() {
-            ring.add_node(node.clone()).unwrap();
+            ring.add_node(node.addr.clone()).unwrap();
         }
 
         for key in test_input.keys.iter() {
@@ -246,68 +245,68 @@ mod tests {
     fn test_hash_fn(key: &[u8]) -> u128 {
         // this table precisely maps known keys to known hashes.
         // we will build test cases to cover all cases based on these known keys.
-        let table: HashMap<String, u128> = vec![
-            ("Node A".to_string(), 10u128),
-            ("Node B".to_string(), 20u128),
-            ("Node C".to_string(), 30u128),
-            ("Node D".to_string(), 40u128),
-            ("key 1".to_string(), 1u128),
-            ("key 2".to_string(), 5u128),
-            ("key 3".to_string(), 10u128),
-            ("key 4".to_string(), 11u128),
-            ("key 5".to_string(), 19u128),
-            ("key 6".to_string(), 20u128),
-            ("key 7".to_string(), 21u128),
-            ("key 8".to_string(), 28u128),
-            ("key 9".to_string(), 30u128),
-            ("key 10".to_string(), 31u128),
-            ("key 11".to_string(), 39u128),
-            ("key 12".to_string(), 40u128),
-            ("key 13".to_string(), 41u128),
+        let table: HashMap<Bytes, u128> = vec![
+            (Bytes::from_static(b"Node A"), 10u128),
+            (Bytes::from_static(b"Node B"), 20u128),
+            (Bytes::from_static(b"Node C"), 30u128),
+            (Bytes::from_static(b"Node D"), 40u128),
+            (Bytes::from_static(b"key 1"), 1u128),
+            (Bytes::from_static(b"key 2"), 5u128),
+            (Bytes::from_static(b"key 3"), 10u128),
+            (Bytes::from_static(b"key 4"), 11u128),
+            (Bytes::from_static(b"key 5"), 19u128),
+            (Bytes::from_static(b"key 6"), 20u128),
+            (Bytes::from_static(b"key 7"), 21u128),
+            (Bytes::from_static(b"key 8"), 28u128),
+            (Bytes::from_static(b"key 9"), 30u128),
+            (Bytes::from_static(b"key 10"), 31u128),
+            (Bytes::from_static(b"key 11"), 39u128),
+            (Bytes::from_static(b"key 12"), 40u128),
+            (Bytes::from_static(b"key 13"), 41u128),
         ]
         .into_iter()
         .collect();
 
-        table[&String::from_utf8(Vec::from(key)).unwrap()]
+        table[&Bytes::copy_from_slice(key)]
     }
 
-    fn test_nodes() -> Vec<Node> {
+    fn test_nodes() -> Vec<TestNode> {
         vec![
-            Node {
-                addr: "Node A".to_string(),
+            TestNode {
+                addr: Bytes::from_static(b"Node A"),
             },
-            Node {
-                addr: "Node B".to_string(),
+            TestNode {
+                addr: Bytes::from_static(b"Node B"),
             },
-            Node {
-                addr: "Node C".to_string(),
+            TestNode {
+                addr: Bytes::from_static(b"Node C"),
             },
-            Node {
-                addr: "Node D".to_string(),
+            TestNode {
+                addr: Bytes::from_static(b"Node D"),
             },
         ]
     }
 
-    fn test_keys() -> Vec<String> {
+    fn test_keys() -> Vec<Bytes> {
         vec![
-            "key 1".to_string(),
-            "key 2".to_string(),
-            "key 3".to_string(),
-            "key 4".to_string(),
-            "key 5".to_string(),
-            "key 6".to_string(),
-            "key 7".to_string(),
-            "key 8".to_string(),
-            "key 9".to_string(),
-            "key 10".to_string(),
-            "key 11".to_string(),
-            "key 12".to_string(),
-            "key 13".to_string(),
+            Bytes::from_static(b"key 1"),
+            Bytes::from_static(b"key 2"),
+            Bytes::from_static(b"key 3"),
+            Bytes::from_static(b"key 4"),
+            Bytes::from_static(b"key 5"),
+            Bytes::from_static(b"key 6"),
+            Bytes::from_static(b"key 7"),
+            Bytes::from_static(b"key 8"),
+            Bytes::from_static(b"key 9"),
+            Bytes::from_static(b"key 10"),
+            Bytes::from_static(b"key 11"),
+            Bytes::from_static(b"key 12"),
+            Bytes::from_static(b"key 13"),
         ]
     }
     struct TableTest {
-        key: String,
-        owner: Node,
+        key: Bytes,
+        owner: TestNode,
     }
 
     #[test]
@@ -372,13 +371,13 @@ mod tests {
 
         let mut ring = ConsistentHashing::new_with_hash_fn(test_hash_fn);
         for node in nodes.iter() {
-            ring.add_node(node.clone()).unwrap();
+            ring.add_node(node.addr.clone()).unwrap();
         }
 
         for test_case in test_cases {
             assert_eq!(
-                test_case.owner,
-                ring.key_owner(test_case.key.as_bytes()).unwrap()
+                test_case.owner.addr,
+                ring.key_owner(&test_case.key).unwrap()
             );
         }
     }
@@ -387,12 +386,12 @@ mod tests {
     fn test_single_node() {
         let mut ring = ConsistentHashing::new_with_hash_fn(test_hash_fn);
         let nodes = test_nodes();
-        ring.add_node(nodes[0].clone()).unwrap();
+        ring.add_node(nodes[0].addr.clone()).unwrap();
 
         // All keys must belong to this single node
         let keys = test_keys();
         for key in keys {
-            assert_eq!(nodes[0].clone(), ring.key_owner(key.as_bytes()).unwrap());
+            assert_eq!(nodes[0].addr, ring.key_owner(&key).unwrap());
         }
     }
 
@@ -400,17 +399,17 @@ mod tests {
     fn test_add_node() {
         let mut ring = ConsistentHashing::new_with_hash_fn(test_hash_fn);
         let nodes = test_nodes();
-        ring.add_node(nodes[0].clone()).unwrap();
+        ring.add_node(nodes[0].addr.clone()).unwrap();
 
         // All keys must belong to this single node
         let keys = test_keys();
         for key in keys.iter() {
-            assert_eq!(nodes[0].clone(), ring.key_owner(key.as_bytes()).unwrap());
+            assert_eq!(nodes[0].addr.clone(), ring.key_owner(&key).unwrap());
         }
 
         // By adding a node, we change the ownership.
         // let's make sure this change works as expected
-        ring.add_node(nodes[1].clone()).unwrap();
+        ring.add_node(nodes[1].addr.clone()).unwrap();
         let test_cases: Vec<TableTest> = vec![
             TableTest {
                 key: keys[0].clone(),
@@ -468,8 +467,8 @@ mod tests {
 
         for test_case in test_cases {
             assert_eq!(
-                test_case.owner,
-                ring.key_owner(test_case.key.as_bytes()).unwrap()
+                test_case.owner.addr,
+                ring.key_owner(&test_case.key).unwrap()
             );
         }
     }
@@ -480,8 +479,8 @@ mod tests {
         let nodes = test_nodes();
 
         // start with nodes A and B
-        ring.add_node(nodes[0].clone()).unwrap();
-        ring.add_node(nodes[1].clone()).unwrap();
+        ring.add_node(nodes[0].addr.clone()).unwrap();
+        ring.add_node(nodes[1].addr.clone()).unwrap();
 
         let keys = test_keys();
         let test_cases: Vec<TableTest> = vec![
@@ -541,15 +540,22 @@ mod tests {
 
         for test_case in test_cases {
             assert_eq!(
-                test_case.owner,
-                ring.key_owner(test_case.key.as_bytes()).unwrap()
+                test_case.owner.addr,
+                ring.key_owner(&test_case.key).unwrap()
             );
         }
 
         // now let's remove node A and make sure all keys belong to node B
-        ring.remove_node(nodes[0].clone());
+        ring.remove_node(&nodes[0].addr);
         for key in keys.iter() {
-            assert_eq!(nodes[1].clone(), ring.key_owner(key.as_bytes()).unwrap());
+            assert_eq!(nodes[1].addr, ring.key_owner(&key).unwrap());
         }
+    }
+
+    #[test]
+    fn test_key_owner_without_nodes() {
+        let ring = ConsistentHashing::default();
+        let random_key = String::from("foo");
+        assert!(ring.key_owner(random_key.as_bytes()).is_err());
     }
 }
