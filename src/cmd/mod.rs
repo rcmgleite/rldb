@@ -1,3 +1,4 @@
+pub mod cluster;
 pub mod get;
 pub mod ping;
 pub mod put;
