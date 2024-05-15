@@ -7,10 +7,10 @@ use std::fmt::Debug;
 pub mod in_memory;
 
 #[async_trait]
-pub trait StorageEngine: Clone + Debug {
+pub trait StorageEngine: Debug {
     async fn get(&self, key: &Bytes) -> anyhow::Result<Option<Bytes>>;
     async fn put(&self, key: Bytes, value: Bytes) -> anyhow::Result<()>;
     async fn delete(&self, key: &Bytes) -> anyhow::Result<()>;
     async fn keys(&self) -> anyhow::Result<Vec<Bytes>>;
-    async fn snapshot(&self) -> anyhow::Result<Self>;
+    // async fn snapshot(&self) -> anyhow::Result<Self>;
 }

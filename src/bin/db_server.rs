@@ -1,13 +1,14 @@
+use std::path::PathBuf;
+
 use clap::Parser;
-use rldb::{server::run, storage_engine::in_memory::InMemory};
-use tokio::net::TcpListener;
+use rldb::server::Server;
 
 #[derive(Debug, Parser)]
 #[command(name = "rldb-server")]
 #[command(about = "rldb-server tcp server", long_about = None)]
 struct Cli {
-    #[arg(short)]
-    port: u16,
+    #[arg(long)]
+    config_path: PathBuf,
 }
 
 #[tokio::main]
@@ -15,9 +16,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Cli::parse();
 
-    let storage_engine = InMemory::default();
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    run(listener, storage_engine).await?;
+    let server = Server::from_config(args.config_path).await?;
+    server.run().await?;
 
     Ok(())
 }

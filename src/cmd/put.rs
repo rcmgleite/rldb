@@ -3,10 +3,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
 
-use crate::{
-    server::{IntoRequest, Request},
-    storage_engine::StorageEngine,
-};
+use crate::server::{IntoRequest, Request, SyncStorageEngine};
 
 pub const PUT_CMD: u32 = 3;
 
@@ -21,7 +18,7 @@ impl Put {
         Self { key, value }
     }
 
-    pub async fn execute<S: StorageEngine>(self, storage_engine: S) -> PutResponse {
+    pub async fn execute(self, storage_engine: SyncStorageEngine) -> PutResponse {
         match storage_engine.put(self.key.into(), self.value.into()).await {
             Ok(()) => PutResponse::Success {
                 message: "Ok".to_string(),

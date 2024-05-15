@@ -9,22 +9,29 @@
 //!    - currently a simple header (cmd,length) and a binary payload
 //!
 //! The Request protocol in this mod is agnostic to the serialization format of the payload.
+use crate::storage_engine::in_memory::InMemory;
+use crate::{cmd::Command, storage_engine::StorageEngine};
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::Serialize;
-use std::fmt::Debug;
 use std::mem::size_of;
+use std::sync::Arc;
+use std::{fmt::Debug, path::PathBuf};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tracing::{event, instrument, Level};
 
-use crate::{cmd::Command, storage_engine::StorageEngine};
+use self::config::{Config, StandaloneConfig};
 
-struct Listener<S: StorageEngine> {
+pub mod config;
+
+pub type SyncStorageEngine = Arc<dyn StorageEngine + Send + Sync + 'static>;
+
+pub struct Server {
     listener: TcpListener,
-    storage_engine: S,
+    storage_engine: SyncStorageEngine,
 }
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
@@ -125,8 +132,32 @@ impl Response {
     }
 }
 
-impl<S: StorageEngine + Send + 'static> Listener<S> {
-    async fn run(&self) -> anyhow::Result<()> {
+impl Server {
+    pub async fn from_config(path: PathBuf) -> anyhow::Result<Self> {
+        let c = tokio::fs::read_to_string(path).await?;
+        let config: Config = serde_json::from_str(&c)?;
+
+        match config.cluster_type {
+            config::ClusterType::Standalone(StandaloneConfig {
+                port,
+                storage_engine,
+            }) => {
+                let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+
+                let storage_engine = match storage_engine {
+                    config::StorageEngine::InMemory => Arc::new(InMemory::default()),
+                };
+
+                Ok(Self {
+                    listener,
+                    storage_engine,
+                })
+            }
+            config::ClusterType::Cluster(_) => todo!(),
+        }
+    }
+
+    pub async fn run(&self) -> anyhow::Result<()> {
         event!(Level::INFO, "Listener started");
 
         loop {
@@ -143,9 +174,9 @@ impl<S: StorageEngine + Send + 'static> Listener<S> {
 }
 
 #[instrument(level = "debug")]
-async fn handle_connection<S: StorageEngine>(
+async fn handle_connection(
     mut tcp_stream: TcpStream,
-    storage_engine: S,
+    storage_engine: SyncStorageEngine,
 ) -> anyhow::Result<()> {
     loop {
         let request = Request::try_from_async_read(&mut tcp_stream).await?;
@@ -156,15 +187,4 @@ async fn handle_connection<S: StorageEngine>(
 
         tcp_stream.write_all(&response).await?;
     }
-}
-
-pub async fn run<S: StorageEngine + Send + 'static>(
-    listener: TcpListener,
-    storage_engine: S,
-) -> anyhow::Result<()> {
-    let server = Listener {
-        listener,
-        storage_engine,
-    };
-    server.run().await
 }

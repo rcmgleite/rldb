@@ -10,8 +10,7 @@ use tracing::{event, Level};
 
 use crate::{
     cmd::{get::GET_CMD, ping::PING_CMD, put::PUT_CMD},
-    server::{Request, Response},
-    storage_engine::StorageEngine,
+    server::{Request, Response, SyncStorageEngine},
 };
 
 pub enum Command {
@@ -21,7 +20,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub async fn execute<S: StorageEngine>(self, storage_engine: S) -> Response {
+    pub async fn execute(self, storage_engine: SyncStorageEngine) -> Response {
         match self {
             Command::Ping(cmd) => {
                 let payload = cmd.execute().await;

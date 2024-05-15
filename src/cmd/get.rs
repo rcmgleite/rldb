@@ -2,10 +2,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    server::{IntoRequest, Request},
-    storage_engine::StorageEngine,
-};
+use crate::server::{IntoRequest, Request, SyncStorageEngine};
 
 pub const GET_CMD: u32 = 2;
 
@@ -19,7 +16,7 @@ impl Get {
         Self { key }
     }
 
-    pub async fn execute<S: StorageEngine>(self, storage_engine: S) -> GetResponse {
+    pub async fn execute(self, storage_engine: SyncStorageEngine) -> GetResponse {
         let key_bytes = self.key.into();
         match storage_engine.get(&key_bytes).await {
             Ok(Some(value)) => GetResponse::Success {

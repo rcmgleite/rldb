@@ -53,15 +53,15 @@ impl StorageEngine for InMemory {
         }
     }
 
-    async fn snapshot(&self) -> anyhow::Result<Self> {
-        if let Ok(guard) = self.inner.read() {
-            Ok(Self {
-                inner: Arc::new(RwLock::new(guard.clone())),
-            })
-        } else {
-            Err(anyhow!(LOCK_ERR))
-        }
-    }
+    // async fn snapshot(&self) -> anyhow::Result<Self> {
+    //     if let Ok(guard) = self.inner.read() {
+    //         Ok(Self {
+    //             inner: Arc::new(RwLock::new(guard.clone())),
+    //         })
+    //     } else {
+    //         Err(anyhow!(LOCK_ERR))
+    //     }
+    // }
 }
 
 #[cfg(test)]
