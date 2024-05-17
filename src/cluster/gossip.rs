@@ -12,8 +12,7 @@
 //!     This happens by each node randomly choosing another 2 nodes to ping every 1 second (configurable)
 //!     Hosts that are unreachable or respond with anything other than success are marked as
 //!     [`NodeStatus::PossiblyOffline`]
-
-use super::ring_state::NodeStatus;
+use super::ring_state::{Node, NodeStatus};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -21,9 +20,29 @@ pub struct RingStateMessagePayload {
     nodes: Vec<JsonSerializableNode>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct JsonSerializableNode {
-    addr: Vec<u8>,
+    pub addr: String,
     status: NodeStatus,
     tick: u128,
+}
+
+impl From<Node> for JsonSerializableNode {
+    fn from(node: Node) -> Self {
+        Self {
+            addr: String::from_utf8(node.addr.into()).unwrap(),
+            status: node.status,
+            tick: node.tick,
+        }
+    }
+}
+
+impl From<JsonSerializableNode> for Node {
+    fn from(node: JsonSerializableNode) -> Self {
+        Self {
+            addr: node.addr.into(),
+            status: node.status,
+            tick: node.tick,
+        }
+    }
 }

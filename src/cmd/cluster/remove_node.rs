@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::{IntoRequest, Request};
 
-const CMD_CLUSTER_REMOVE_NODE: u32 = 101;
+pub const CMD_CLUSTER_REMOVE_NODE: u32 = 102;
 
 #[derive(Serialize, Deserialize)]
 pub struct RemoveNode {

@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Cli::parse();
 
-    let server = Server::from_config(args.config_path).await?;
+    let mut server = Server::from_config(args.config_path).await?;
     server.run().await?;
 
     Ok(())

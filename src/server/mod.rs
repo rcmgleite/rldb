@@ -9,10 +9,13 @@
 //!    - currently a simple header (cmd,length) and a binary payload
 //!
 //! The Request protocol in this mod is agnostic to the serialization format of the payload.
+use crate::cluster::ring_state::RingState;
+use crate::cmd::ClusterCommand;
 use crate::storage_engine::in_memory::InMemory;
 use crate::{cmd::Command, storage_engine::StorageEngine};
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
+use local_ip_address::local_ip;
 use serde::Serialize;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -23,15 +26,33 @@ use tokio::{
 };
 use tracing::{event, instrument, Level};
 
-use self::config::{Config, StandaloneConfig};
+use self::config::{ClusterConfig, Config, StandaloneConfig};
 
 pub mod config;
 
 pub type SyncStorageEngine = Arc<dyn StorageEngine + Send + Sync + 'static>;
 
 pub struct Server {
-    listener: TcpListener,
+    client_listener: TcpListener,
     storage_engine: SyncStorageEngine,
+    state: ServerState,
+}
+
+#[derive(Debug)]
+pub enum PartitioningScheme {
+    ConsistentHashing(RingState),
+}
+
+pub enum ServerMode {
+    Standalone,
+    Cluster {
+        gossip_listener: TcpListener,
+        partitioning_scheme: Arc<PartitioningScheme>,
+    },
+}
+
+pub struct ServerState {
+    mode: ServerMode,
 }
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
@@ -149,32 +170,84 @@ impl Server {
                 };
 
                 Ok(Self {
-                    listener,
+                    client_listener: listener,
                     storage_engine,
+                    state: ServerState {
+                        mode: ServerMode::Standalone,
+                    },
                 })
             }
-            config::ClusterType::Cluster(_) => todo!(),
+
+            config::ClusterType::Cluster(ClusterConfig {
+                port,
+                storage_engine,
+                partitioning_scheme,
+                gossip,
+                // TODO: wire quorum configs once this feature is implemented
+                quorum: _,
+            }) => {
+                let client_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+
+                let storage_engine = match storage_engine {
+                    config::StorageEngine::InMemory => Arc::new(InMemory::default()),
+                };
+
+                let partitioning_scheme = match partitioning_scheme {
+                    config::PartitioningScheme::ConsistentHashing => {
+                        let own_addr = Bytes::from(local_ip().unwrap().to_string());
+                        PartitioningScheme::ConsistentHashing(RingState::new(own_addr))
+                    }
+                };
+
+                let gossip_listener =
+                    TcpListener::bind(format!("127.0.0.1:{}", gossip.port)).await?;
+
+                Ok(Self {
+                    client_listener,
+                    storage_engine,
+                    state: ServerState {
+                        mode: ServerMode::Cluster {
+                            gossip_listener,
+                            partitioning_scheme: Arc::new(partitioning_scheme),
+                        },
+                    },
+                })
+            }
         }
     }
 
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> anyhow::Result<()> {
         event!(Level::INFO, "Listener started");
-
-        loop {
-            let (tcp_stream, _) = self.listener.accept().await?;
-            event!(
-                Level::DEBUG,
-                "accepted new tcp connection: {:?}",
-                tcp_stream
-            );
-            let storage_engine = self.storage_engine.clone();
-            tokio::spawn(handle_connection(tcp_stream, storage_engine));
+        if let ServerMode::Cluster {
+            gossip_listener,
+            partitioning_scheme,
+        } = &self.state.mode
+        {
+            // for now let's accept new connections from both the client_listener and gossip_listener
+            // in the same server instance.. this might become very odd very quickly
+            loop {
+                tokio::select! {
+                    Ok((tcp_stream, _)) = self.client_listener.accept() => {
+                        let storage_engine = self.storage_engine.clone();
+                        tokio::spawn(handle_client_connection(tcp_stream, storage_engine));
+                    }
+                    Ok((tcp_stream, _)) = gossip_listener.accept() => {
+                        tokio::spawn(handle_gossip_connection(tcp_stream, partitioning_scheme.clone()));
+                    }
+                }
+            }
+        } else {
+            loop {
+                let (tcp_stream, _) = self.client_listener.accept().await?;
+                let storage_engine = self.storage_engine.clone();
+                tokio::spawn(handle_client_connection(tcp_stream, storage_engine));
+            }
         }
     }
 }
 
 #[instrument(level = "debug")]
-async fn handle_connection(
+async fn handle_client_connection(
     mut tcp_stream: TcpStream,
     storage_engine: SyncStorageEngine,
 ) -> anyhow::Result<()> {
@@ -182,6 +255,22 @@ async fn handle_connection(
         let request = Request::try_from_async_read(&mut tcp_stream).await?;
         let cmd = Command::try_from_request(request)?;
         let response = cmd.execute(storage_engine.clone()).await.serialize();
+
+        event!(Level::DEBUG, "going to write response: {:?}", response);
+
+        tcp_stream.write_all(&response).await?;
+    }
+}
+
+#[instrument(level = "debug")]
+async fn handle_gossip_connection(
+    mut tcp_stream: TcpStream,
+    partition_scheme: Arc<PartitioningScheme>,
+) -> anyhow::Result<()> {
+    loop {
+        let request = Request::try_from_async_read(&mut tcp_stream).await?;
+        let cmd = ClusterCommand::try_from_request(request)?;
+        let response = cmd.execute(partition_scheme.clone()).await.serialize();
 
         event!(Level::DEBUG, "going to write response: {:?}", response);
 

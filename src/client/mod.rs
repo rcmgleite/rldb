@@ -4,8 +4,13 @@ use tokio::{
 };
 
 use crate::{
+    cluster::{gossip::JsonSerializableNode, ring_state::Node},
     cmd::{
         self,
+        cluster::{
+            heartbeat::{HeartbeatResponse, CMD_CLUSTER_HEARTBEAT},
+            join_cluster::{JoinClusterResponse, CMD_CLUSTER_JOIN_CLUSTER},
+        },
         get::{GetResponse, GET_CMD},
         ping::{PingResponse, PING_CMD},
         put::{PutResponse, PUT_CMD},
@@ -54,6 +59,36 @@ impl DbClient {
 
         let response = Request::try_from_async_read(&mut self.stream).await?;
         assert_eq!(response.id, PUT_CMD);
+        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+    }
+
+    pub async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> anyhow::Result<HeartbeatResponse> {
+        let serializible_nodes = known_nodes
+            .into_iter()
+            .map(JsonSerializableNode::from)
+            .collect();
+
+        let cmd = cmd::cluster::heartbeat::Heartbeat::new(serializible_nodes);
+        let req = Request::serialize(cmd);
+
+        self.stream.write_all(&req).await?;
+
+        let response = Request::try_from_async_read(&mut self.stream).await?;
+        assert_eq!(response.id, CMD_CLUSTER_HEARTBEAT);
+        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+    }
+
+    pub async fn join_cluster(
+        &mut self,
+        known_cluster_node_addr: String,
+    ) -> anyhow::Result<JoinClusterResponse> {
+        let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
+        let req = Request::serialize(cmd);
+
+        self.stream.write_all(&req).await?;
+
+        let response = Request::try_from_async_read(&mut self.stream).await?;
+        assert_eq!(response.id, CMD_CLUSTER_JOIN_CLUSTER);
         Ok(serde_json::from_slice(&response.payload.unwrap())?)
     }
 }
