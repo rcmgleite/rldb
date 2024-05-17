@@ -8,3 +8,31 @@ Each module in this project contains it own README that will include as much con
 
 ## Goals
 The goal of this project is to have simple implementations for all major features of a dynamo-like database as a way to deep dive on distributed system challenges.
+
+## Running the server
+
+### Standalone
+TODO
+
+### Cluster Mode
+
+
+1. Start nodes using config files in different terminals
+```
+RUST_BACKTRACE=1 RUST_LOG=debug cargo run --bin rldb-server -- --config-path conf/cluster_node_1.json
+```
+```
+RUST_BACKTRACE=1 RUST_LOG=debug cargo run --bin rldb-server -- --config-path conf/cluster_node_2.json
+```
+```
+RUST_BACKTRACE=1 RUST_LOG=debug cargo run --bin rldb-server -- --config-path conf/cluster_node_3.json
+```
+
+2. Include the new nodes to the cluster
+
+In this example, we assume node on port 4001 to be the initial cluster node and we add the other nodes to it.
+
+```
+RUST_LOG=DEBUG cargo run --bin rldb-client join-cluster -p 4002 --known-cluster-node 127.0.0.1:4001
+RUST_LOG=DEBUG cargo run --bin rldb-client join-cluster -p 4003 --known-cluster-node 127.0.0.1:4001
+```

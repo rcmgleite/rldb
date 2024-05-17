@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{IntoRequest, Request, SyncStorageEngine};
+use crate::server::{IntoRequest, Message, SyncStorageEngine};
 
 pub const GET_CMD: u32 = 2;
 
@@ -31,7 +31,7 @@ impl Get {
         }
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
         if request.id != GET_CMD {
             return Err(anyhow!(
                 "Unable to construct Get Command from Request. Expected id {} got {}",

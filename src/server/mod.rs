@@ -9,13 +9,13 @@
 //!    - currently a simple header (cmd,length) and a binary payload
 //!
 //! The Request protocol in this mod is agnostic to the serialization format of the payload.
+use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::ring_state::RingState;
 use crate::cmd::ClusterCommand;
 use crate::storage_engine::in_memory::InMemory;
 use crate::{cmd::Command, storage_engine::StorageEngine};
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
-use local_ip_address::local_ip;
 use serde::Serialize;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -62,8 +62,8 @@ const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
 /// A Request is the unit of the protocol built on top of TCP
 /// that this server uses.
 #[derive(Debug)]
-pub struct Request {
-    /// Request id -> used as a way of identifying the format of the payload for deserialization
+pub struct Message {
+    /// Message id -> used as a way of identifying the format of the payload for deserialization
     pub id: u32,
     /// length of the payload
     pub length: u32,
@@ -71,7 +71,15 @@ pub struct Request {
     pub payload: Option<Bytes>,
 }
 
-impl Request {
+impl Message {
+    pub fn new(id: u32, payload: Option<Bytes>) -> Self {
+        Self {
+            id,
+            length: payload.clone().map_or(0, |elem| elem.len() as u32),
+            payload,
+        }
+    }
+
     pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> anyhow::Result<Self> {
         let id = reader.read_u32().await?;
         let length = reader.read_u32().await?;
@@ -107,10 +115,9 @@ pub trait IntoRequest: Serialize {
     }
 }
 
-impl Request {
-    pub fn serialize<T: IntoRequest>(value: T) -> Bytes {
+impl Message {
+    pub fn serialize_into_request<T: IntoRequest>(value: T) -> Bytes {
         let id = value.id();
-        event!(Level::DEBUG, "Will serialize cmd: {}", id);
         let mut buf;
         if let Some(payload) = value.payload() {
             buf = BytesMut::with_capacity(payload.len() + 2 * size_of::<u32>());
@@ -125,29 +132,17 @@ impl Request {
 
         buf.freeze()
     }
-}
 
-/// Similar to [`Request`], [`Response`] is also agnostic to the payload serialization format
-#[derive(Debug)]
-pub struct Response {
-    id: u32,
-    payload: Bytes,
-}
-
-impl Response {
-    pub fn new(id: u32, payload: Bytes) -> Self {
-        Self { id, payload }
-    }
-}
-
-impl Response {
-    fn serialize(self) -> Bytes {
+    pub fn serialize(self) -> Bytes {
         let payload = self.payload;
-        let mut buf = BytesMut::with_capacity(payload.len() + 2 * size_of::<u32>());
+        let payload_len = payload.clone().map_or(0, |payload| payload.len());
+        let mut buf = BytesMut::with_capacity(payload_len + 2 * size_of::<u32>());
 
         buf.put_u32(self.id);
-        buf.put_u32(payload.len() as u32);
-        buf.put(payload.clone());
+        buf.put_u32(payload_len as u32);
+        if let Some(payload) = payload {
+            buf.put(payload);
+        }
 
         buf.freeze()
     }
@@ -192,15 +187,23 @@ impl Server {
                     config::StorageEngine::InMemory => Arc::new(InMemory::default()),
                 };
 
+                // configure the partitioning_scheme. This step already
+                // includes the node itself to the ring.
                 let partitioning_scheme = match partitioning_scheme {
                     config::PartitioningScheme::ConsistentHashing => {
-                        let own_addr = Bytes::from(local_ip().unwrap().to_string());
-                        PartitioningScheme::ConsistentHashing(RingState::new(own_addr))
+                        // let own_addr = Bytes::from(local_ip().unwrap().to_string());
+                        let own_addr = Bytes::from(format!("127.0.0.1:{}", gossip.port));
+                        let ring_state = RingState::new(own_addr);
+                        Arc::new(PartitioningScheme::ConsistentHashing(ring_state))
                     }
                 };
 
                 let gossip_listener =
                     TcpListener::bind(format!("127.0.0.1:{}", gossip.port)).await?;
+
+                // FIXME: There's a big problem here - if this task exists how will
+                // the node know that it has to shutdown? Something to be fixed soon...
+                tokio::spawn(start_heartbeat(partitioning_scheme.clone()));
 
                 Ok(Self {
                     client_listener,
@@ -208,7 +211,7 @@ impl Server {
                     state: ServerState {
                         mode: ServerMode::Cluster {
                             gossip_listener,
-                            partitioning_scheme: Arc::new(partitioning_scheme),
+                            partitioning_scheme: partitioning_scheme,
                         },
                     },
                 })
@@ -252,11 +255,9 @@ async fn handle_client_connection(
     storage_engine: SyncStorageEngine,
 ) -> anyhow::Result<()> {
     loop {
-        let request = Request::try_from_async_read(&mut tcp_stream).await?;
+        let request = Message::try_from_async_read(&mut tcp_stream).await?;
         let cmd = Command::try_from_request(request)?;
         let response = cmd.execute(storage_engine.clone()).await.serialize();
-
-        event!(Level::DEBUG, "going to write response: {:?}", response);
 
         tcp_stream.write_all(&response).await?;
     }
@@ -268,11 +269,9 @@ async fn handle_gossip_connection(
     partition_scheme: Arc<PartitioningScheme>,
 ) -> anyhow::Result<()> {
     loop {
-        let request = Request::try_from_async_read(&mut tcp_stream).await?;
+        let request = Message::try_from_async_read(&mut tcp_stream).await?;
         let cmd = ClusterCommand::try_from_request(request)?;
         let response = cmd.execute(partition_scheme.clone()).await.serialize();
-
-        event!(Level::DEBUG, "going to write response: {:?}", response);
 
         tcp_stream.write_all(&response).await?;
     }

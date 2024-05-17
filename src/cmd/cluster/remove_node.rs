@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{IntoRequest, Request};
+use crate::server::{IntoRequest, Message};
 
 pub const CMD_CLUSTER_REMOVE_NODE: u32 = 102;
 
@@ -21,7 +21,7 @@ impl RemoveNode {
         todo!()
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
         if request.id != CMD_CLUSTER_REMOVE_NODE {
             return Err(anyhow!(
                 "Unable to construct RemoveNode Command from Request. Expected id {} got {}",

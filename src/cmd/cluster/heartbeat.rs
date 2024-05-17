@@ -5,8 +5,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cluster::{gossip::JsonSerializableNode, ring_state::Node},
-    server::{IntoRequest, PartitioningScheme, Request},
+    cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
+    server::{IntoRequest, PartitioningScheme, Message},
 };
 
 pub const CMD_CLUSTER_HEARTBEAT: u32 = 100;
@@ -24,7 +24,7 @@ impl Heartbeat {
     // Heartbeat flow
     // 1. receive a heartbeat (possibly from a node that it doesn't know yet)
     // 2. update it's view of the ring state including the possibly new node
-    // 4. responde to the heartbeat with an ACK response
+    // 3. responde to the heartbeat with an ACK response
     //
     // FIXME: The data types here are bad.. a lot of memcpys happening here for no good reason.
     // main problem is the json format not being able to serialize bytes::Bytes
@@ -39,7 +39,7 @@ impl Heartbeat {
         }
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
         if request.id != CMD_CLUSTER_HEARTBEAT {
             return Err(anyhow!(
                 "Unable to construct Heartbeat Command from Request. Expected id {} got {}",

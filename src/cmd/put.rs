@@ -1,9 +1,8 @@
 use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use tracing::{event, Level};
 
-use crate::server::{IntoRequest, Request, SyncStorageEngine};
+use crate::server::{IntoRequest, Message, SyncStorageEngine};
 
 pub const PUT_CMD: u32 = 3;
 
@@ -29,8 +28,7 @@ impl Put {
         }
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<Self> {
-        event!(Level::DEBUG, "try_from_message: {:?}", request);
+    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
         if request.id != PUT_CMD {
             return Err(anyhow!(
                 "Unable to construct Put Command from Message. Expected id {} got {}",

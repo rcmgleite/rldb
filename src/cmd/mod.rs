@@ -11,11 +11,16 @@ use serde::Serialize;
 use tracing::{event, Level};
 
 use crate::{
-    cmd::{get::GET_CMD, ping::PING_CMD, put::PUT_CMD},
-    server::{PartitioningScheme, Request, Response, SyncStorageEngine},
+    cmd::{
+        cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER, get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
+    },
+    server::{Message, PartitioningScheme, SyncStorageEngine},
 };
 
-use self::cluster::heartbeat::{Heartbeat, CMD_CLUSTER_HEARTBEAT};
+use self::cluster::{
+    heartbeat::{Heartbeat, CMD_CLUSTER_HEARTBEAT},
+    join_cluster::JoinCluster,
+};
 
 pub enum Command {
     Ping(ping::Ping),
@@ -24,59 +29,62 @@ pub enum Command {
 }
 
 impl Command {
-    pub async fn execute(self, storage_engine: SyncStorageEngine) -> Response {
+    pub async fn execute(self, storage_engine: SyncStorageEngine) -> Message {
         match self {
             Command::Ping(cmd) => {
                 let payload = cmd.execute().await;
-                Response::new(PING_CMD, Self::serialize_response_payload(payload))
+                Message::new(PING_CMD, Self::serialize_response_payload(payload))
             }
             Command::Get(cmd) => {
                 let payload = cmd.execute(storage_engine).await;
-                Response::new(GET_CMD, Self::serialize_response_payload(payload))
+                Message::new(GET_CMD, Self::serialize_response_payload(payload))
             }
             Command::Put(cmd) => {
                 let payload = cmd.execute(storage_engine).await;
-                Response::new(PUT_CMD, Self::serialize_response_payload(payload))
+                Message::new(PUT_CMD, Self::serialize_response_payload(payload))
             }
         }
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<Command> {
-        event!(Level::DEBUG, "trying to parse cmd: {}", request.id);
+    pub fn try_from_request(request: Message) -> anyhow::Result<Command> {
         match request.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
             GET_CMD => Ok(Command::Get(get::Get::try_from_request(request)?)),
             PUT_CMD => Ok(Command::Put(put::Put::try_from_request(request)?)),
             _ => {
-                event!(Level::ERROR, "Unrecognized command: {}", request.id);
+                event!(Level::WARN, "Unrecognized command: {}", request.id);
                 return Err(anyhow!("Unrecognized command: {}", request.id));
             }
         }
     }
 
-    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Bytes {
-        Bytes::from(serde_json::to_string(&payload).unwrap())
+    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
 }
 
 pub enum ClusterCommand {
     Heartbeat(Heartbeat),
-    AddNode,
+    JoinCluster(JoinCluster),
     RemoveNode,
 }
 
 impl ClusterCommand {
-    pub async fn execute(self, partition_scheme: Arc<PartitioningScheme>) -> Response {
+    pub async fn execute(self, partition_scheme: Arc<PartitioningScheme>) -> Message {
         match self {
             ClusterCommand::Heartbeat(cmd) => {
                 let payload = cmd.execute(partition_scheme).await;
-                Response::new(
+                Message::new(
                     CMD_CLUSTER_HEARTBEAT,
                     Self::serialize_response_payload(payload),
                 )
             }
-            ClusterCommand::AddNode => {
-                todo!()
+            ClusterCommand::JoinCluster(cmd) => {
+                let payload = cmd.execute(partition_scheme).await;
+                Message::new(
+                    CMD_CLUSTER_JOIN_CLUSTER,
+                    Self::serialize_response_payload(payload),
+                )
             }
             ClusterCommand::RemoveNode => {
                 todo!()
@@ -84,20 +92,22 @@ impl ClusterCommand {
         }
     }
 
-    pub fn try_from_request(request: Request) -> anyhow::Result<ClusterCommand> {
-        event!(Level::DEBUG, "trying to parse cmd: {}", request.id);
+    pub fn try_from_request(request: Message) -> anyhow::Result<ClusterCommand> {
         match request.id {
             CMD_CLUSTER_HEARTBEAT => Ok(ClusterCommand::Heartbeat(
                 cluster::heartbeat::Heartbeat::try_from_request(request)?,
             )),
+            CMD_CLUSTER_JOIN_CLUSTER => Ok(ClusterCommand::JoinCluster(
+                cluster::join_cluster::JoinCluster::try_from_request(request)?,
+            )),
             _ => {
-                event!(Level::ERROR, "Unrecognized command: {}", request.id);
+                event!(Level::WARN, "Unrecognized command: {}", request.id);
                 return Err(anyhow!("Unrecognized command: {}", request.id));
             }
         }
     }
 
-    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Bytes {
-        Bytes::from(serde_json::to_string(&payload).unwrap())
+    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
 }

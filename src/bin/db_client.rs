@@ -36,6 +36,14 @@ enum Commands {
         #[arg(short)]
         value: String,
     },
+    #[command()]
+    JoinCluster {
+        #[arg(short)]
+        port: u16,
+
+        #[arg(long)]
+        known_cluster_node: String,
+    },
 }
 
 #[tokio::main]
@@ -61,6 +69,16 @@ async fn main() -> anyhow::Result<()> {
         Commands::Put { port, key, value } => {
             let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
             let response = client.put(key, value).await?;
+            let mut stdout = tokio::io::stdout();
+            let payload = serde_json::to_string(&response)?;
+            stdout.write_all(payload.as_bytes()).await?;
+        }
+        Commands::JoinCluster {
+            port,
+            known_cluster_node,
+        } => {
+            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let response = client.join_cluster(known_cluster_node).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;
