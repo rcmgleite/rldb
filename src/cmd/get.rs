@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +7,7 @@ use crate::{
     error::{Error, Result},
     server::{
         message::{IntoMessage, Message},
-        SyncStorageEngine,
+        Db,
     },
 };
 
@@ -21,9 +23,9 @@ impl Get {
         Self { key }
     }
 
-    pub async fn execute(self, storage_engine: SyncStorageEngine) -> GetResponse {
+    pub async fn execute(self, db: Arc<Db>) -> GetResponse {
         let key_bytes = self.key.into();
-        match storage_engine.get(&key_bytes).await {
+        match db.storage_engine.get(&key_bytes).await {
             Ok(Some(value)) => GetResponse::Success {
                 value: String::from_utf8(value.into()).unwrap(),
             },

@@ -9,7 +9,6 @@
 //!    - currently a simple header (cmd,length) and a json encoded payload
 use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::ring_state::RingState;
-use crate::cmd::ClusterCommand;
 use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use crate::{cmd::Command, storage_engine::StorageEngine};
@@ -32,8 +31,15 @@ pub type SyncStorageEngine = Arc<dyn StorageEngine + Send + Sync + 'static>;
 
 pub struct Server {
     client_listener: TcpListener,
-    storage_engine: SyncStorageEngine,
-    state: ServerState,
+    db: Arc<Db>,
+}
+
+// TODO: This Db struct is very cumbersome... rework it..
+#[derive(Debug)]
+pub struct Db {
+    pub storage_engine: SyncStorageEngine,
+    pub partitioning_scheme: Option<Arc<PartitioningScheme>>,
+    pub state: ServerState,
 }
 
 #[derive(Debug)]
@@ -41,16 +47,15 @@ pub enum PartitioningScheme {
     ConsistentHashing(RingState),
 }
 
+#[derive(Debug)]
 pub enum ServerMode {
     Standalone,
-    Cluster {
-        gossip_listener: TcpListener,
-        partitioning_scheme: Arc<PartitioningScheme>,
-    },
+    Cluster { gossip_listener: TcpListener },
 }
 
+#[derive(Debug)]
 pub struct ServerState {
-    mode: ServerMode,
+    pub mode: ServerMode,
 }
 
 impl Server {
@@ -73,10 +78,13 @@ impl Server {
 
                 Ok(Self {
                     client_listener: listener,
-                    storage_engine,
-                    state: ServerState {
-                        mode: ServerMode::Standalone,
-                    },
+                    db: Arc::new(Db {
+                        storage_engine,
+                        partitioning_scheme: None,
+                        state: ServerState {
+                            mode: ServerMode::Standalone,
+                        },
+                    }),
                 })
             }
 
@@ -114,13 +122,13 @@ impl Server {
 
                 Ok(Self {
                     client_listener,
-                    storage_engine,
-                    state: ServerState {
-                        mode: ServerMode::Cluster {
-                            gossip_listener,
-                            partitioning_scheme: partitioning_scheme,
+                    db: Arc::new(Db {
+                        storage_engine,
+                        partitioning_scheme: Some(partitioning_scheme),
+                        state: ServerState {
+                            mode: ServerMode::Cluster { gossip_listener },
                         },
-                    },
+                    }),
                 })
             }
         }
@@ -128,57 +136,38 @@ impl Server {
 
     pub async fn run(&mut self) -> Result<()> {
         event!(Level::INFO, "Listener started");
-        if let ServerMode::Cluster {
-            gossip_listener,
-            partitioning_scheme,
-        } = &self.state.mode
-        {
+        if let ServerMode::Cluster { gossip_listener } = &self.db.state.mode {
             // for now let's accept new connections from both the client_listener and gossip_listener
             // in the same server instance.. this might become very odd very quickly
             loop {
-                tokio::select! {
-                    Ok((tcp_stream, _)) = self.client_listener.accept() => {
-                        let storage_engine = self.storage_engine.clone();
-                        tokio::spawn(handle_client_connection(tcp_stream, storage_engine));
+                let conn = tokio::select! {
+                    Ok((conn, _)) = self.client_listener.accept() => {
+                       conn
                     }
-                    Ok((tcp_stream, _)) = gossip_listener.accept() => {
-                        tokio::spawn(handle_gossip_connection(tcp_stream, partitioning_scheme.clone()));
+                    Ok((conn, _)) = gossip_listener.accept() => {
+                        conn
                     }
-                }
+                };
+
+                let db = self.db.clone();
+                tokio::spawn(handle_connection(conn, db));
             }
         } else {
             loop {
-                let (tcp_stream, _) = self.client_listener.accept().await?;
-                let storage_engine = self.storage_engine.clone();
-                tokio::spawn(handle_client_connection(tcp_stream, storage_engine));
+                let (conn, _) = self.client_listener.accept().await?;
+                let db = self.db.clone();
+                tokio::spawn(handle_connection(conn, db));
             }
         }
     }
 }
 
 #[instrument(level = "debug")]
-async fn handle_client_connection(
-    mut tcp_stream: TcpStream,
-    storage_engine: SyncStorageEngine,
-) -> Result<()> {
+async fn handle_connection(mut tcp_stream: TcpStream, db: Arc<Db>) -> Result<()> {
     loop {
         let request = Message::try_from_async_read(&mut tcp_stream).await?;
         let cmd = Command::try_from_request(request)?;
-        let response = cmd.execute(storage_engine.clone()).await.serialize();
-
-        tcp_stream.write_all(&response).await?;
-    }
-}
-
-#[instrument(level = "debug")]
-async fn handle_gossip_connection(
-    mut tcp_stream: TcpStream,
-    partition_scheme: Arc<PartitioningScheme>,
-) -> Result<()> {
-    loop {
-        let request = Message::try_from_async_read(&mut tcp_stream).await?;
-        let cmd = ClusterCommand::try_from_request(request)?;
-        let response = cmd.execute(partition_scheme.clone()).await.serialize();
+        let response = cmd.execute(db.clone()).await.serialize();
 
         tcp_stream.write_all(&response).await?;
     }

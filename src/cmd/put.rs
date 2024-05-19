@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::server::message::{IntoMessage, Message};
-use crate::server::SyncStorageEngine;
+use crate::server::Db;
 
 pub const PUT_CMD: u32 = 3;
 
@@ -18,8 +20,12 @@ impl Put {
         Self { key, value }
     }
 
-    pub async fn execute(self, storage_engine: SyncStorageEngine) -> PutResponse {
-        match storage_engine.put(self.key.into(), self.value.into()).await {
+    pub async fn execute(self, db: Arc<Db>) -> PutResponse {
+        match db
+            .storage_engine
+            .put(self.key.into(), self.value.into())
+            .await
+        {
             Ok(()) => PutResponse::Success {
                 message: "Ok".to_string(),
             },

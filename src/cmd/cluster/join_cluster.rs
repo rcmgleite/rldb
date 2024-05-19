@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     server::{
         message::{IntoMessage, Message},
-        PartitioningScheme,
+        Db, PartitioningScheme,
     },
 };
 
@@ -29,17 +29,19 @@ impl JoinCluster {
     // This cmd simply adds the provided target node to the ring_state.
     // the background heartbeat process will take care of receiving ring state info
     // from this node (eventually)
-    pub async fn execute(
-        self,
-        partitioning_scheme: Arc<PartitioningScheme>,
-    ) -> JoinClusterResponse {
-        let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-        let target_node = Node::new(Bytes::from(self.known_cluster_node_addr));
+    pub async fn execute(self, db: Arc<Db>) -> JoinClusterResponse {
+        if let Some(partitioning_scheme) = &db.partitioning_scheme {
+            let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
 
-        ring_state.merge_nodes(vec![target_node]);
+            let target_node = Node::new(Bytes::from(self.known_cluster_node_addr));
 
-        JoinClusterResponse::Success {
-            message: "Ok".to_string(),
+            ring_state.merge_nodes(vec![target_node]);
+
+            JoinClusterResponse::Success {
+                message: "Ok".to_string(),
+            }
+        } else {
+            todo!()
         }
     }
 

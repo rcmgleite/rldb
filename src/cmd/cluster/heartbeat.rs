@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     server::{
         message::{IntoMessage, Message},
-        PartitioningScheme,
+        Db, PartitioningScheme,
     },
 };
 
@@ -31,14 +31,18 @@ impl Heartbeat {
     //
     // FIXME: The data types here are bad.. a lot of memcpys happening here for no good reason.
     // main problem is the json format not being able to serialize bytes::Bytes
-    pub async fn execute(self, partitioning_scheme: Arc<PartitioningScheme>) -> HeartbeatResponse {
-        let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-        let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
+    pub async fn execute(self, db: Arc<Db>) -> HeartbeatResponse {
+        if let Some(partitioning_scheme) = &db.partitioning_scheme {
+            let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
 
-        ring_state.merge_nodes(nodes);
+            let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
+            ring_state.merge_nodes(nodes);
 
-        HeartbeatResponse::Success {
-            message: "ACK".to_string(),
+            HeartbeatResponse::Success {
+                message: "ACK".to_string(),
+            }
+        } else {
+            todo!()
         }
     }
 
