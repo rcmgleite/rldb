@@ -1,8 +1,9 @@
 use std::mem::size_of;
 
-use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
+
+use crate::error::Result;
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
 /// than 1Mb of memory...
@@ -30,17 +31,18 @@ impl Message {
         Self { id, payload }
     }
 
-    pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> anyhow::Result<Self> {
+    pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Self> {
         let id = reader.read_u32().await?;
         let length = reader.read_u32().await?;
 
         let payload = if length > 0 {
             if length > MAX_MESSAGE_SIZE as u32 {
-                return Err(anyhow!(
-                    "Request length too long {} - max accepted value: {}",
-                    length,
-                    MAX_MESSAGE_SIZE
-                ));
+                return Err(crate::error::Error::InvalidRequest {
+                    reason: format!(
+                        "Request length too long {} - max accepted value: {}",
+                        length, MAX_MESSAGE_SIZE
+                    ),
+                });
             }
             let mut buf = vec![0u8; length as usize];
             reader.read_exact(&mut buf).await?;

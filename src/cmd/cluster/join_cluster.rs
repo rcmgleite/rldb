@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::ring_state::Node,
+    error::{Error, Result},
     server::{
         message::{IntoMessage, Message},
         PartitioningScheme,
@@ -43,20 +43,28 @@ impl JoinCluster {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> Result<Self> {
         if request.id != CMD_CLUSTER_JOIN_CLUSTER {
-            return Err(anyhow!(
-                "Unable to construct JoinCluster Command from Request. Expected id {} got {}",
-                CMD_CLUSTER_JOIN_CLUSTER,
-                request.id
-            ));
+            return Err(Error::InvalidRequest {
+                reason: format!(
+                    "Unable to construct JoinCluster Command from Request. Expected id {} got {}",
+                    CMD_CLUSTER_JOIN_CLUSTER, request.id
+                ),
+            });
         }
 
         if let Some(payload) = request.payload {
-            let s: Self = serde_json::from_slice(&payload)?;
+            let s: Self = serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
+                reason: format!(
+                    "Invalid json payload for JoinCluster request {}",
+                    e.to_string()
+                ),
+            })?;
             Ok(s)
         } else {
-            return Err(anyhow!("JoinCluster message payload can't be None"));
+            return Err(Error::InvalidRequest {
+                reason: "JoinCluster message payload can't be None".to_string(),
+            });
         }
     }
 }

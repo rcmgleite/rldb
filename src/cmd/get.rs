@@ -1,10 +1,12 @@
-use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{
-    message::{IntoMessage, Message},
-    SyncStorageEngine,
+use crate::{
+    error::{Error, Result},
+    server::{
+        message::{IntoMessage, Message},
+        SyncStorageEngine,
+    },
 };
 
 pub const GET_CMD: u32 = 2;
@@ -34,20 +36,25 @@ impl Get {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> Result<Self> {
         if request.id != GET_CMD {
-            return Err(anyhow!(
-                "Unable to construct Get Command from Request. Expected id {} got {}",
-                GET_CMD,
-                request.id
-            ));
+            return Err(Error::InvalidRequest {
+                reason: format!(
+                    "Unable to construct Get Command from Request. Expected id {} got {}",
+                    GET_CMD, request.id
+                ),
+            });
         }
 
         if let Some(payload) = request.payload {
-            let s: Self = serde_json::from_slice(&payload)?;
+            let s: Self = serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
+                reason: format!("Invalid json payload for Get request {}", e.to_string()),
+            })?;
             Ok(s)
         } else {
-            return Err(anyhow!("Get message payload can't be None"));
+            return Err(Error::InvalidRequest {
+                reason: "Get message payload can't be None".to_string(),
+            });
         }
     }
 }

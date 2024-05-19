@@ -5,7 +5,6 @@ pub mod put;
 
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bytes::Bytes;
 use serde::Serialize;
 use tracing::{event, Level};
@@ -14,6 +13,7 @@ use crate::{
     cmd::{
         cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER, get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
+    error::{Error, Result},
     server::{message::Message, PartitioningScheme, SyncStorageEngine},
 };
 
@@ -46,14 +46,16 @@ impl Command {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<Command> {
+    pub fn try_from_request(request: Message) -> Result<Command> {
         match request.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
             GET_CMD => Ok(Command::Get(get::Get::try_from_request(request)?)),
             PUT_CMD => Ok(Command::Put(put::Put::try_from_request(request)?)),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", request.id);
-                return Err(anyhow!("Unrecognized command: {}", request.id));
+                return Err(crate::error::Error::InvalidRequest {
+                    reason: format!("Unrecognized command: {}", request.id),
+                });
             }
         }
     }
@@ -92,7 +94,7 @@ impl ClusterCommand {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<ClusterCommand> {
+    pub fn try_from_request(request: Message) -> Result<ClusterCommand> {
         match request.id {
             CMD_CLUSTER_HEARTBEAT => Ok(ClusterCommand::Heartbeat(
                 cluster::heartbeat::Heartbeat::try_from_request(request)?,
@@ -102,7 +104,9 @@ impl ClusterCommand {
             )),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", request.id);
-                return Err(anyhow!("Unrecognized command: {}", request.id));
+                return Err(Error::InvalidRequest {
+                    reason: format!("Unrecognized command: {}", request.id),
+                });
             }
         }
     }

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
+    error::{Error, Result},
     server::{
         message::{IntoMessage, Message},
         PartitioningScheme,
@@ -42,20 +42,28 @@ impl Heartbeat {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> Result<Self> {
         if request.id != CMD_CLUSTER_HEARTBEAT {
-            return Err(anyhow!(
-                "Unable to construct Heartbeat Command from Request. Expected id {} got {}",
-                CMD_CLUSTER_HEARTBEAT,
-                request.id
-            ));
+            return Err(Error::InvalidRequest {
+                reason: format!(
+                    "Unable to construct Heartbeat Command from Request. Expected id {} got {}",
+                    CMD_CLUSTER_HEARTBEAT, request.id
+                ),
+            });
         }
 
         if let Some(payload) = request.payload {
-            let s: Self = serde_json::from_slice(&payload)?;
+            let s: Self = serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
+                reason: format!(
+                    "Invalid json payload for Heartbeat request {}",
+                    e.to_string()
+                ),
+            })?;
             Ok(s)
         } else {
-            return Err(anyhow!("Heartbeat message payload can't be None"));
+            return Err(Error::InvalidRequest {
+                reason: "Heartbeat message payload can't be None".to_string(),
+            });
         }
     }
 }

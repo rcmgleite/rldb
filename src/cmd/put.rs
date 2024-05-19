@@ -1,7 +1,7 @@
-use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Error, Result};
 use crate::server::message::{IntoMessage, Message};
 use crate::server::SyncStorageEngine;
 
@@ -29,20 +29,25 @@ impl Put {
         }
     }
 
-    pub fn try_from_request(request: Message) -> anyhow::Result<Self> {
+    pub fn try_from_request(request: Message) -> Result<Self> {
         if request.id != PUT_CMD {
-            return Err(anyhow!(
-                "Unable to construct Put Command from Message. Expected id {} got {}",
-                PUT_CMD,
-                request.id
-            ));
+            return Err(Error::InvalidRequest {
+                reason: format!(
+                    "Unable to construct Put Command from Message. Expected id {} got {}",
+                    PUT_CMD, request.id
+                ),
+            });
         }
 
         if let Some(payload) = request.payload {
-            let s: Self = serde_json::from_slice(&payload)?;
+            let s: Self = serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
+                reason: format!("Invalid json payload for Put request {}", e.to_string()),
+            })?;
             Ok(s)
         } else {
-            return Err(anyhow!("Get message payload can't be None"));
+            return Err(Error::InvalidRequest {
+                reason: "Get message payload can't be None".to_string(),
+            });
         }
     }
 }

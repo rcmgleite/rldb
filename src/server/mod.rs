@@ -10,6 +10,7 @@
 use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::ring_state::RingState;
 use crate::cmd::ClusterCommand;
+use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use crate::{cmd::Command, storage_engine::StorageEngine};
 use bytes::Bytes;
@@ -53,9 +54,11 @@ pub struct ServerState {
 }
 
 impl Server {
-    pub async fn from_config(path: PathBuf) -> anyhow::Result<Self> {
+    pub async fn from_config(path: PathBuf) -> Result<Self> {
         let c = tokio::fs::read_to_string(path).await?;
-        let config: Config = serde_json::from_str(&c)?;
+        let config: Config = serde_json::from_str(&c).map_err(|e| Error::InvalidServerConfig {
+            reason: e.to_string(),
+        })?;
 
         match config.cluster_type {
             config::ClusterType::Standalone(StandaloneConfig {
@@ -123,7 +126,7 @@ impl Server {
         }
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         event!(Level::INFO, "Listener started");
         if let ServerMode::Cluster {
             gossip_listener,
@@ -157,7 +160,7 @@ impl Server {
 async fn handle_client_connection(
     mut tcp_stream: TcpStream,
     storage_engine: SyncStorageEngine,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     loop {
         let request = Message::try_from_async_read(&mut tcp_stream).await?;
         let cmd = Command::try_from_request(request)?;
@@ -171,7 +174,7 @@ async fn handle_client_connection(
 async fn handle_gossip_connection(
     mut tcp_stream: TcpStream,
     partition_scheme: Arc<PartitioningScheme>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     loop {
         let request = Message::try_from_async_read(&mut tcp_stream).await?;
         let cmd = ClusterCommand::try_from_request(request)?;
