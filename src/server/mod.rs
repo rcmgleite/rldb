@@ -6,29 +6,26 @@
 //!    - executes the command
 //!    - writes the response back to the client
 //!  2. The Request protocol
-//!    - currently a simple header (cmd,length) and a binary payload
-//!
-//! The Request protocol in this mod is agnostic to the serialization format of the payload.
+//!    - currently a simple header (cmd,length) and a json encoded payload
 use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::ring_state::RingState;
 use crate::cmd::ClusterCommand;
 use crate::storage_engine::in_memory::InMemory;
 use crate::{cmd::Command, storage_engine::StorageEngine};
-use anyhow::anyhow;
-use bytes::{BufMut, Bytes, BytesMut};
-use serde::Serialize;
-use std::mem::size_of;
+use bytes::Bytes;
 use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
 use tracing::{event, instrument, Level};
 
 use self::config::{ClusterConfig, Config, StandaloneConfig};
+use self::message::Message;
 
 pub mod config;
+pub mod message;
 
 pub type SyncStorageEngine = Arc<dyn StorageEngine + Send + Sync + 'static>;
 
@@ -53,99 +50,6 @@ pub enum ServerMode {
 
 pub struct ServerState {
     mode: ServerMode,
-}
-
-/// Kind of arbitrary but let's make sure a single connection can't consume more
-/// than 1Mb of memory...
-const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
-
-/// A Request is the unit of the protocol built on top of TCP
-/// that this server uses.
-#[derive(Debug)]
-pub struct Message {
-    /// Message id -> used as a way of identifying the format of the payload for deserialization
-    pub id: u32,
-    /// length of the payload
-    pub length: u32,
-    /// the Request payload
-    pub payload: Option<Bytes>,
-}
-
-impl Message {
-    pub fn new(id: u32, payload: Option<Bytes>) -> Self {
-        Self {
-            id,
-            length: payload.clone().map_or(0, |elem| elem.len() as u32),
-            payload,
-        }
-    }
-
-    pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> anyhow::Result<Self> {
-        let id = reader.read_u32().await?;
-        let length = reader.read_u32().await?;
-
-        let payload = if length > 0 {
-            if length > MAX_MESSAGE_SIZE as u32 {
-                return Err(anyhow!(
-                    "Request length too long {} - max accepted value: {}",
-                    length,
-                    MAX_MESSAGE_SIZE
-                ));
-            }
-            let mut buf = vec![0u8; length as usize];
-            reader.read_exact(&mut buf).await?;
-            Some(buf.into())
-        } else {
-            None
-        };
-
-        Ok(Self {
-            id,
-            length,
-            payload,
-        })
-    }
-}
-
-/// Trait used so that specific serialization protocls can be implemented by the Message consumers
-pub trait IntoRequest: Serialize {
-    fn id(&self) -> u32;
-    fn payload(&self) -> Option<Bytes> {
-        None
-    }
-}
-
-impl Message {
-    pub fn serialize_into_request<T: IntoRequest>(value: T) -> Bytes {
-        let id = value.id();
-        let mut buf;
-        if let Some(payload) = value.payload() {
-            buf = BytesMut::with_capacity(payload.len() + 2 * size_of::<u32>());
-            buf.put_u32(id);
-            buf.put_u32(payload.len() as u32);
-            buf.put(payload);
-        } else {
-            buf = BytesMut::with_capacity(2 * size_of::<u32>());
-            buf.put_u32(id);
-            buf.put_u32(0);
-        };
-
-        buf.freeze()
-    }
-
-    pub fn serialize(self) -> Bytes {
-        let payload = self.payload;
-        let payload_len = payload.clone().map_or(0, |payload| payload.len());
-        let mut buf = BytesMut::with_capacity(payload_len + 2 * size_of::<u32>());
-
-        buf.put_u32(self.id);
-        buf.put_u32(payload_len as u32);
-        if let Some(payload) = payload {
-            buf.put(payload);
-        }
-
-        buf.freeze()
-    }
 }
 
 impl Server {

@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{IntoRequest, Message};
+use crate::server::message::{IntoMessage, Message};
 
 pub const CMD_CLUSTER_REMOVE_NODE: u32 = 102;
 
@@ -39,7 +39,7 @@ impl RemoveNode {
     }
 }
 
-impl IntoRequest for RemoveNode {
+impl IntoMessage for RemoveNode {
     fn id(&self) -> u32 {
         CMD_CLUSTER_REMOVE_NODE
     }

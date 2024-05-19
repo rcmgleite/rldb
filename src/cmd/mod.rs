@@ -14,7 +14,7 @@ use crate::{
     cmd::{
         cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER, get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
-    server::{Message, PartitioningScheme, SyncStorageEngine},
+    server::{message::Message, PartitioningScheme, SyncStorageEngine},
 };
 
 use self::cluster::{

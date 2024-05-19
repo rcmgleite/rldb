@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::ring_state::Node,
-    server::{IntoRequest, PartitioningScheme, Message},
+    server::{
+        message::{IntoMessage, Message},
+        PartitioningScheme,
+    },
 };
 
 pub const CMD_CLUSTER_JOIN_CLUSTER: u32 = 101;
@@ -58,7 +61,7 @@ impl JoinCluster {
     }
 }
 
-impl IntoRequest for JoinCluster {
+impl IntoMessage for JoinCluster {
     fn id(&self) -> u32 {
         CMD_CLUSTER_JOIN_CLUSTER
     }

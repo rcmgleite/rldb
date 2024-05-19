@@ -15,7 +15,7 @@ use crate::{
         ping::{PingResponse, PING_CMD},
         put::{PutResponse, PUT_CMD},
     },
-    server::Message,
+    server::message::Message,
 };
 
 pub struct DbClient {
@@ -31,7 +31,7 @@ impl DbClient {
 
     pub async fn ping(&mut self) -> anyhow::Result<PingResponse> {
         let ping_cmd = cmd::ping::Ping;
-        let req = Message::serialize_into_request(ping_cmd);
+        let req = Message::from(ping_cmd).serialize();
 
         self.stream.write_all(&req).await?;
 
@@ -42,7 +42,7 @@ impl DbClient {
 
     pub async fn get(&mut self, key: String) -> anyhow::Result<GetResponse> {
         let get_cmd = cmd::get::Get::new(key);
-        let req = Message::serialize_into_request(get_cmd);
+        let req = Message::from(get_cmd).serialize();
 
         self.stream.write_all(&req).await?;
 
@@ -53,7 +53,7 @@ impl DbClient {
 
     pub async fn put(&mut self, key: String, value: String) -> anyhow::Result<PutResponse> {
         let put_cmd = cmd::put::Put::new(key, value);
-        let req = Message::serialize_into_request(put_cmd);
+        let req = Message::from(put_cmd).serialize();
 
         self.stream.write_all(&req).await?;
 
@@ -69,7 +69,7 @@ impl DbClient {
             .collect();
 
         let cmd = cmd::cluster::heartbeat::Heartbeat::new(serializible_nodes);
-        let req = Message::serialize_into_request(cmd);
+        let req = Message::from(cmd).serialize();
 
         self.stream.write_all(&req).await?;
 
@@ -83,7 +83,7 @@ impl DbClient {
         known_cluster_node_addr: String,
     ) -> anyhow::Result<JoinClusterResponse> {
         let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
-        let req = Message::serialize_into_request(cmd);
+        let req = Message::from(cmd).serialize();
 
         self.stream.write_all(&req).await?;
 

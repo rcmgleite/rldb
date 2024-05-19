@@ -2,7 +2,10 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{IntoRequest, Message, SyncStorageEngine};
+use crate::server::{
+    message::{IntoMessage, Message},
+    SyncStorageEngine,
+};
 
 pub const GET_CMD: u32 = 2;
 
@@ -49,7 +52,7 @@ impl Get {
     }
 }
 
-impl IntoRequest for Get {
+impl IntoMessage for Get {
     fn id(&self) -> u32 {
         GET_CMD
     }

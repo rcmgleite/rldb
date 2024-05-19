@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::server::IntoRequest;
+use crate::server::message::IntoMessage;
 
 pub const PING_CMD: u32 = 1;
 
@@ -15,7 +15,7 @@ impl Ping {
     }
 }
 
-impl IntoRequest for Ping {
+impl IntoMessage for Ping {
     fn id(&self) -> u32 {
         PING_CMD
     }

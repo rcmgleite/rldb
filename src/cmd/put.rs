@@ -2,7 +2,8 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{IntoRequest, Message, SyncStorageEngine};
+use crate::server::message::{IntoMessage, Message};
+use crate::server::SyncStorageEngine;
 
 pub const PUT_CMD: u32 = 3;
 
@@ -46,7 +47,7 @@ impl Put {
     }
 }
 
-impl IntoRequest for Put {
+impl IntoMessage for Put {
     fn id(&self) -> u32 {
         PUT_CMD
     }

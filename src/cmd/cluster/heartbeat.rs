@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
-    server::{IntoRequest, PartitioningScheme, Message},
+    server::{
+        message::{IntoMessage, Message},
+        PartitioningScheme,
+    },
 };
 
 pub const CMD_CLUSTER_HEARTBEAT: u32 = 100;
@@ -57,7 +60,7 @@ impl Heartbeat {
     }
 }
 
-impl IntoRequest for Heartbeat {
+impl IntoMessage for Heartbeat {
     fn id(&self) -> u32 {
         CMD_CLUSTER_HEARTBEAT
     }
