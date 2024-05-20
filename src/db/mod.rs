@@ -57,10 +57,12 @@ impl Db {
         }
     }
 
-    pub fn update_ring_state(&self, nodes: Vec<Node>) {
+    pub fn update_ring_state(&self, nodes: Vec<Node>) -> anyhow::Result<()> {
         if let Some(partitioning_scheme) = self.partitioning_scheme.clone() {
             let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-            ring_state.merge_nodes(nodes);
+            ring_state.merge_nodes(nodes)
+        } else {
+            Ok(())
         }
     }
 }

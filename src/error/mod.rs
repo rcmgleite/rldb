@@ -11,6 +11,7 @@ pub enum Error {
     InvalidServerConfig { reason: String },
     Internal,
     Io { reason: String },
+    Generic { reason: String },
 }
 
 impl Display for Error {
@@ -24,6 +25,14 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
         Self::Io {
+            reason: err.to_string(),
+        }
+    }
+}
+
+impl From<anyhow::Error> for Error {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Generic {
             reason: err.to_string(),
         }
     }

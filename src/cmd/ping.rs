@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::server::message::IntoMessage;
+use crate::{error::Result, server::message::IntoMessage};
 
 pub const PING_CMD: u32 = 1;
 
@@ -8,10 +8,10 @@ pub const PING_CMD: u32 = 1;
 pub struct Ping;
 
 impl Ping {
-    pub async fn execute(self) -> PingResponse {
-        PingResponse {
+    pub async fn execute(self) -> Result<PingResponse> {
+        Ok(PingResponse {
             message: "PONG".to_string(),
-        }
+        })
     }
 }
 

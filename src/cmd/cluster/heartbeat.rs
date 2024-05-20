@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
     db::Db,
+    error::Result,
     server::message::IntoMessage,
 };
 
@@ -28,13 +29,13 @@ impl Heartbeat {
     //
     // FIXME: The data types here are bad.. a lot of memcpys happening here for no good reason.
     // main problem is the json format not being able to serialize bytes::Bytes
-    pub async fn execute(self, db: Arc<Db>) -> HeartbeatResponse {
+    pub async fn execute(self, db: Arc<Db>) -> Result<HeartbeatResponse> {
         let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
-        db.update_ring_state(nodes);
+        db.update_ring_state(nodes)?;
 
-        HeartbeatResponse::Success {
-            message: "ACK".to_string(),
-        }
+        Ok(HeartbeatResponse {
+            message: "Ok".to_string(),
+        })
     }
 
     pub fn cmd_id() -> u32 {
@@ -53,7 +54,6 @@ impl IntoMessage for Heartbeat {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum HeartbeatResponse {
-    Success { message: String },
-    Failure { message: String },
+pub struct HeartbeatResponse {
+    message: String,
 }

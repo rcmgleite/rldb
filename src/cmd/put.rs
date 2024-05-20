@@ -4,6 +4,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Db, OwnsKeyResponse};
+use crate::error::{Error, Result};
 use crate::server::message::IntoMessage;
 
 pub const PUT_CMD: u32 = 3;
@@ -19,24 +20,20 @@ impl Put {
         Self { key, value }
     }
 
-    pub async fn execute(self, db: Arc<Db>) -> PutResponse {
+    pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
         if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes()) {
-            return PutResponse::Failure {
-                message: format!(
+            return Err(Error::InvalidRequest {
+                reason: format!(
                     "Key owned by another node. Redirect request to node {:?}",
                     addr
                 ),
-            };
+            });
         }
 
-        match db.put(self.key.into(), self.value.into()).await {
-            Ok(()) => PutResponse::Success {
-                message: "Ok".to_string(),
-            },
-            Err(err) => PutResponse::Failure {
-                message: err.to_string(),
-            },
-        }
+        db.put(self.key.into(), self.value.into()).await?;
+        Ok(PutResponse {
+            message: "Ok".to_string(),
+        })
     }
 
     pub fn cmd_id() -> u32 {
@@ -55,7 +52,6 @@ impl IntoMessage for Put {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum PutResponse {
-    Success { message: String },
-    Failure { message: String },
+pub struct PutResponse {
+    message: String,
 }

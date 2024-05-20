@@ -59,10 +59,9 @@ struct RingStateInner {
 }
 
 impl RingState {
-    pub fn new(own_addr: Bytes) -> Self {
+    pub fn new(own_addr: Bytes) -> anyhow::Result<Self> {
         let mut partitioning_scheme = ConsistentHashing::default();
-        // the first insertion is always successful. unwrap() is safe
-        partitioning_scheme.add_node(own_addr.clone()).unwrap();
+        partitioning_scheme.add_node(own_addr.clone())?;
         let mut nodes = HashMap::new();
         nodes.insert(
             own_addr.clone(),
@@ -73,13 +72,13 @@ impl RingState {
             },
         );
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Mutex::new(RingStateInner {
                 nodes,
                 partitioning_scheme,
                 own_addr,
             })),
-        }
+        })
     }
 
     pub fn knows_node(&self, key: &[u8]) -> bool {
@@ -94,7 +93,7 @@ impl RingState {
     }
     /// Merges the current ring state view with the one passed as rhs.
     /// This is used as part of the gossip protocol exchange for cluster state synchronization
-    pub fn merge_nodes(&self, nodes: Vec<Node>) {
+    pub fn merge_nodes(&self, nodes: Vec<Node>) -> anyhow::Result<()> {
         let mut inner_guard = self.inner.lock().unwrap();
         let own_addr = inner_guard.own_addr.clone();
         for node in nodes {
@@ -127,11 +126,12 @@ impl RingState {
             } else {
                 inner_guard
                     .partitioning_scheme
-                    .add_node(node.addr.clone())
-                    .unwrap();
+                    .add_node(node.addr.clone())?;
                 inner_guard.nodes.insert(node.addr.clone(), node);
             }
         }
+
+        Ok(())
     }
 
     pub fn mark_node_as_possibly_offline(&self, node: Node) {

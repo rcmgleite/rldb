@@ -35,7 +35,7 @@ pub struct JsonSerializableNode {
 impl From<Node> for JsonSerializableNode {
     fn from(node: Node) -> Self {
         Self {
-            addr: String::from_utf8(node.addr.into()).unwrap(),
+            addr: String::from_utf8_lossy(&node.addr).into(),
             status: node.status,
             tick: node.tick,
         }
@@ -80,12 +80,8 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
         let conn = if let Some(conn) = cluster_connections.get_mut(&target_node.addr) {
             conn
         } else {
-            // unwrap is safe because we construct the addrs and we know they are valid utf8 strings...
-            let client = match client::DbClient::connect(
-                String::from_utf8(target_node.addr.clone().into()).unwrap(),
-            )
-            .await
-            {
+            let addr: String = String::from_utf8_lossy(&target_node.addr).into();
+            let client = match client::DbClient::connect(addr).await {
                 Ok(conn) => conn,
                 Err(err) => {
                     event!(
