@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
-    server::{message::IntoMessage, Db, PartitioningScheme},
+    db::Db,
+    server::message::IntoMessage,
 };
 
 pub const CMD_CLUSTER_HEARTBEAT: u32 = 100;
@@ -28,19 +29,11 @@ impl Heartbeat {
     // FIXME: The data types here are bad.. a lot of memcpys happening here for no good reason.
     // main problem is the json format not being able to serialize bytes::Bytes
     pub async fn execute(self, db: Arc<Db>) -> HeartbeatResponse {
-        if let Some(partitioning_scheme) = &db.partitioning_scheme {
-            let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
+        let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
+        db.update_ring_state(nodes);
 
-            let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
-            ring_state.merge_nodes(nodes);
-
-            HeartbeatResponse::Success {
-                message: "ACK".to_string(),
-            }
-        } else {
-            HeartbeatResponse::Failure {
-                message: "Heartbeat to a node not in cluster mode is not supported".to_string(),
-            }
+        HeartbeatResponse::Success {
+            message: "ACK".to_string(),
         }
     }
 }

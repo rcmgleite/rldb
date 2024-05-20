@@ -179,6 +179,10 @@ impl RingState {
     pub fn own_addr(&self) -> Bytes {
         self.inner.lock().unwrap().own_addr.clone()
     }
+
+    pub fn owns_key(&self, key: &[u8]) -> bool {
+        self.own_addr() == self.key_owner(key).unwrap().addr
+    }
 }
 
 #[cfg(test)]

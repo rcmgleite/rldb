@@ -3,7 +3,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{message::IntoMessage, Db};
+use crate::db::{Db, OwnsKeyResponse};
+use crate::server::message::IntoMessage;
 
 pub const GET_CMD: u32 = 2;
 
@@ -18,8 +19,16 @@ impl Get {
     }
 
     pub async fn execute(self, db: Arc<Db>) -> GetResponse {
-        let key_bytes = self.key.into();
-        match db.storage_engine.get(&key_bytes).await {
+        if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes()) {
+            return GetResponse::Failure {
+                message: format!(
+                    "Key owned by another node. Redirect request to node {:?}",
+                    addr
+                ),
+            };
+        }
+
+        match db.get(self.key.as_bytes()).await {
             Ok(Some(value)) => GetResponse::Success {
                 value: String::from_utf8(value.into()).unwrap(),
             },

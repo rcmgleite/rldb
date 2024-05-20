@@ -17,7 +17,7 @@ const LOCK_ERR: &str = "Unable to acquire InMemory lock. This should never happe
 
 #[async_trait]
 impl StorageEngine for InMemory {
-    async fn get(&self, key: &Bytes) -> anyhow::Result<Option<Bytes>> {
+    async fn get(&self, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         if let Ok(guard) = self.inner.lock() {
             Ok(guard.get(key).map(Clone::clone))
         } else {
@@ -37,7 +37,7 @@ impl StorageEngine for InMemory {
         }
     }
 
-    async fn delete(&self, key: &Bytes) -> anyhow::Result<()> {
+    async fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
         if let Ok(mut guard) = self.inner.lock() {
             guard.remove(key);
             Ok(())

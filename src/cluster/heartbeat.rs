@@ -14,7 +14,7 @@
 //!     [`NodeStatus::PossiblyOffline`]
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{client, server::PartitioningScheme};
+use crate::{client, db::PartitioningScheme};
 
 use super::ring_state::{Node, NodeStatus};
 use serde::{Deserialize, Serialize};

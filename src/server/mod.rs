@@ -10,11 +10,12 @@
 use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::ring_state::RingState;
 use crate::cmd::Command;
+use crate::db::{Db, PartitioningScheme};
 use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use bytes::Bytes;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::{fmt::Debug, path::PathBuf};
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -27,8 +28,6 @@ use self::message::Message;
 pub mod config;
 pub mod message;
 
-pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + Sync + 'static>;
-
 pub struct Server {
     /// listener for incoming client requests
     client_listener: TcpListener,
@@ -36,20 +35,6 @@ pub struct Server {
     /// Only exists in cluster configuration
     cluster_listener: Option<TcpListener>,
     db: Arc<Db>,
-}
-
-#[derive(Debug)]
-pub struct Db {
-    /// the underlaying storage engine
-    pub storage_engine: StorageEngine,
-    /// the partition scheme (if any)
-    /// This will be present if this is configured as a cluster node
-    pub partitioning_scheme: Option<Arc<PartitioningScheme>>,
-}
-
-#[derive(Debug)]
-pub enum PartitioningScheme {
-    ConsistentHashing(RingState),
 }
 
 impl Server {
@@ -73,10 +58,7 @@ impl Server {
                 Ok(Self {
                     client_listener: listener,
                     cluster_listener: None,
-                    db: Arc::new(Db {
-                        storage_engine,
-                        partitioning_scheme: None,
-                    }),
+                    db: Arc::new(Db::new(storage_engine, None)),
                 })
             }
 
@@ -115,10 +97,7 @@ impl Server {
                 Ok(Self {
                     client_listener,
                     cluster_listener: Some(cluster_listener),
-                    db: Arc::new(Db {
-                        storage_engine,
-                        partitioning_scheme: Some(partitioning_scheme),
-                    }),
+                    db: Arc::new(Db::new(storage_engine, Some(partitioning_scheme))),
                 })
             }
         }

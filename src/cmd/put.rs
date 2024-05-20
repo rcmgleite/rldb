@@ -3,8 +3,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::db::{Db, OwnsKeyResponse};
 use crate::server::message::IntoMessage;
-use crate::server::Db;
 
 pub const PUT_CMD: u32 = 3;
 
@@ -20,11 +20,16 @@ impl Put {
     }
 
     pub async fn execute(self, db: Arc<Db>) -> PutResponse {
-        match db
-            .storage_engine
-            .put(self.key.into(), self.value.into())
-            .await
-        {
+        if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes()) {
+            return PutResponse::Failure {
+                message: format!(
+                    "Key owned by another node. Redirect request to node {:?}",
+                    addr
+                ),
+            };
+        }
+
+        match db.put(self.key.into(), self.value.into()).await {
             Ok(()) => PutResponse::Success {
                 message: "Ok".to_string(),
             },

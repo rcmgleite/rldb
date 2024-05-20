@@ -13,8 +13,9 @@ use crate::{
     cmd::{
         cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER, get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
+    db::Db,
     error::{Error, Result},
-    server::{message::Message, Db},
+    server::message::Message,
 };
 
 use self::cluster::{
