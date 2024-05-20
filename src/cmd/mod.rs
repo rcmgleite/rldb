@@ -32,6 +32,33 @@ pub enum Command {
     JoinCluster(JoinCluster),
 }
 
+macro_rules! try_from_message_with_payload {
+    ($message:expr, $cmd:expr, $t:ty) => {{
+        (|| {
+            if $message.id != $cmd {
+                return Err(Error::InvalidRequest {
+                    reason: format!(
+                        "Unable to construct Get Command from Request. Expected id {} got {}",
+                        $cmd, $message.id
+                    ),
+                });
+            }
+
+            if let Some(payload) = $message.payload {
+                let s: $t =
+                    serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
+                        reason: format!("Invalid json payload for request {}", e.to_string()),
+                    })?;
+                Ok(s)
+            } else {
+                return Err(Error::InvalidRequest {
+                    reason: "Message payload can't be None".to_string(),
+                });
+            }
+        })()
+    }};
+}
+
 impl Command {
     pub async fn execute(self, db: Arc<Db>) -> Message {
         match self {
@@ -64,21 +91,33 @@ impl Command {
         }
     }
 
-    pub fn try_from_request(request: Message) -> Result<Command> {
-        match request.id {
+    pub fn try_from_message(message: Message) -> Result<Command> {
+        match message.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
-            GET_CMD => Ok(Command::Get(get::Get::try_from_request(request)?)),
-            PUT_CMD => Ok(Command::Put(put::Put::try_from_request(request)?)),
-            CMD_CLUSTER_HEARTBEAT => Ok(Command::Heartbeat(
-                cluster::heartbeat::Heartbeat::try_from_request(request)?,
-            )),
-            CMD_CLUSTER_JOIN_CLUSTER => Ok(Command::JoinCluster(
-                cluster::join_cluster::JoinCluster::try_from_request(request)?,
-            )),
+            GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
+                message,
+                GET_CMD,
+                get::Get
+            )?)),
+            PUT_CMD => Ok(Command::Put(try_from_message_with_payload!(
+                message,
+                PUT_CMD,
+                put::Put
+            )?)),
+            CMD_CLUSTER_HEARTBEAT => Ok(Command::Heartbeat(try_from_message_with_payload!(
+                message,
+                CMD_CLUSTER_HEARTBEAT,
+                cluster::heartbeat::Heartbeat
+            )?)),
+            CMD_CLUSTER_JOIN_CLUSTER => Ok(Command::JoinCluster(try_from_message_with_payload!(
+                message,
+                CMD_CLUSTER_JOIN_CLUSTER,
+                cluster::join_cluster::JoinCluster
+            )?)),
             _ => {
-                event!(Level::WARN, "Unrecognized command: {}", request.id);
+                event!(Level::WARN, "Unrecognized command: {}", message.id);
                 return Err(Error::InvalidRequest {
-                    reason: format!("Unrecognized command: {}", request.id),
+                    reason: format!("Unrecognized command: {}", message.id),
                 });
             }
         }

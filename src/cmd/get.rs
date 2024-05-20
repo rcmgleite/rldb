@@ -3,13 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    error::{Error, Result},
-    server::{
-        message::{IntoMessage, Message},
-        Db,
-    },
-};
+use crate::server::{message::IntoMessage, Db};
 
 pub const GET_CMD: u32 = 2;
 
@@ -35,28 +29,6 @@ impl Get {
             Err(err) => GetResponse::Failure {
                 message: err.to_string(),
             },
-        }
-    }
-
-    pub fn try_from_request(request: Message) -> Result<Self> {
-        if request.id != GET_CMD {
-            return Err(Error::InvalidRequest {
-                reason: format!(
-                    "Unable to construct Get Command from Request. Expected id {} got {}",
-                    GET_CMD, request.id
-                ),
-            });
-        }
-
-        if let Some(payload) = request.payload {
-            let s: Self = serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
-                reason: format!("Invalid json payload for Get request {}", e.to_string()),
-            })?;
-            Ok(s)
-        } else {
-            return Err(Error::InvalidRequest {
-                reason: "Get message payload can't be None".to_string(),
-            });
         }
     }
 }

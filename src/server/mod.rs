@@ -156,8 +156,8 @@ impl Server {
 #[instrument(level = "debug")]
 async fn handle_connection(mut tcp_stream: TcpStream, db: Arc<Db>) -> Result<()> {
     loop {
-        let request = Message::try_from_async_read(&mut tcp_stream).await?;
-        let cmd = Command::try_from_request(request)?;
+        let message = Message::try_from_async_read(&mut tcp_stream).await?;
+        let cmd = Command::try_from_message(message)?;
         let response = cmd.execute(db.clone()).await.serialize();
 
         tcp_stream.write_all(&response).await?;
