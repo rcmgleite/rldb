@@ -38,7 +38,9 @@ impl Heartbeat {
                 message: "ACK".to_string(),
             }
         } else {
-            todo!()
+            HeartbeatResponse::Failure {
+                message: "Heartbeat to a node not in cluster mode is not supported".to_string(),
+            }
         }
     }
 }

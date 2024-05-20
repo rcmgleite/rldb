@@ -37,7 +37,7 @@ impl JoinCluster {
                 message: "Ok".to_string(),
             }
         } else {
-            todo!()
+            JoinClusterResponse::Failure { message: "Issuing a JoinCluster request against a node not in cluster mode is not supported".to_string() }
         }
     }
 }
