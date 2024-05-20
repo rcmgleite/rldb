@@ -1,7 +1,6 @@
-use anyhow::anyhow;
 use bytes::Bytes;
 use murmur3::murmur3_x86_128;
-use std::io::Cursor;
+use std::{fmt::Display, io::Cursor};
 
 /// Let's force the usage of Hash functions that return u128 for now..
 type HashFunctionReturnType = u128;
@@ -63,10 +62,10 @@ impl ConsistentHashing {
     }
 
     /// Adds a new node to the hash ring
-    pub fn add_node(&mut self, node: Bytes) -> anyhow::Result<HashFunctionReturnType> {
+    pub fn add_node(&mut self, node: Bytes) -> Result<HashFunctionReturnType> {
         let node_hash = (self.hash_fn)(&node);
         match self.keys.binary_search(&node_hash) {
-            Ok(_) =>return Err(anyhow!("ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...")),
+            Ok(_) =>return Err(Error::Internal { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() }),
             Err(index) => {
                 self.keys.insert(index, node_hash);
                 self.nodes.insert(index, node);
@@ -86,9 +85,11 @@ impl ConsistentHashing {
 
     /// Finds the owner [`Node`] of a given key
     /// Returns an error if the current ConsistentHash instance doesn't have at least one [`Node`]
-    pub fn key_owner(&self, key: &[u8]) -> anyhow::Result<ConsistentHashKey> {
+    pub fn key_owner(&self, key: &[u8]) -> Result<ConsistentHashKey> {
         if self.nodes.is_empty() {
-            return Err(anyhow!("Can't ask for owner if no nodes are present"));
+            return Err(Error::Logic {
+                reason: "Can't ask for owner if no nodes are present".to_string(),
+            });
         }
 
         let key_hash = (self.hash_fn)(key);
@@ -104,6 +105,22 @@ impl ConsistentHashing {
 pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
     murmur3_x86_128(&mut Cursor::new(key), 0).unwrap()
 }
+
+#[derive(Debug)]
+pub enum Error {
+    Internal { reason: String },
+    Logic { reason: String },
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
