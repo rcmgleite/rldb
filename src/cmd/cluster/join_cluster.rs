@@ -31,11 +31,15 @@ impl JoinCluster {
             message: "Ok".to_string(),
         }
     }
+
+    pub fn cmd_id() -> u32 {
+        CMD_CLUSTER_JOIN_CLUSTER
+    }
 }
 
 impl IntoMessage for JoinCluster {
     fn id(&self) -> u32 {
-        CMD_CLUSTER_JOIN_CLUSTER
+        Self::cmd_id()
     }
 
     fn payload(&self) -> Option<Bytes> {

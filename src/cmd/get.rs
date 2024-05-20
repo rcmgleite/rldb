@@ -40,11 +40,15 @@ impl Get {
             },
         }
     }
+
+    pub fn cmd_id() -> u32 {
+        GET_CMD
+    }
 }
 
 impl IntoMessage for Get {
     fn id(&self) -> u32 {
-        GET_CMD
+        Self::cmd_id()
     }
 
     fn payload(&self) -> Option<Bytes> {

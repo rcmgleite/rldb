@@ -36,11 +36,15 @@ impl Heartbeat {
             message: "ACK".to_string(),
         }
     }
+
+    pub fn cmd_id() -> u32 {
+        CMD_CLUSTER_HEARTBEAT
+    }
 }
 
 impl IntoMessage for Heartbeat {
     fn id(&self) -> u32 {
-        CMD_CLUSTER_HEARTBEAT
+        Self::cmd_id()
     }
 
     fn payload(&self) -> Option<Bytes> {

@@ -38,11 +38,15 @@ impl Put {
             },
         }
     }
+
+    pub fn cmd_id() -> u32 {
+        PUT_CMD
+    }
 }
 
 impl IntoMessage for Put {
     fn id(&self) -> u32 {
-        PUT_CMD
+        Self::cmd_id()
     }
 
     fn payload(&self) -> Option<Bytes> {

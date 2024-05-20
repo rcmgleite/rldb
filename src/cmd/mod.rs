@@ -6,41 +6,43 @@ pub mod put;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cluster::heartbeat::Heartbeat as HeartbeatCommand;
+use cluster::join_cluster::JoinCluster as JoinClusterCommand;
+use get::Get as GetCommand;
+use ping::Ping as PingCommand;
+use put::Put as PutCommand;
 use serde::Serialize;
 use tracing::{event, Level};
 
 use crate::{
     cmd::{
-        cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER, get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
+        cluster::heartbeat::CMD_CLUSTER_HEARTBEAT, cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER,
+        get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
     db::Db,
     error::{Error, Result},
     server::message::Message,
 };
 
-use self::cluster::{
-    heartbeat::{Heartbeat, CMD_CLUSTER_HEARTBEAT},
-    join_cluster::JoinCluster,
-};
-
 // TODO: Note - we are mixing cluster and client commands here... it might be better to split them in the future.
 // right now a cluster command issued against the client port will run normally which is a bit weird...
 pub enum Command {
-    Ping(ping::Ping),
-    Get(get::Get),
-    Put(put::Put),
-    Heartbeat(Heartbeat),
-    JoinCluster(JoinCluster),
+    Ping(PingCommand),
+    Get(GetCommand),
+    Put(PutCommand),
+    Heartbeat(HeartbeatCommand),
+    JoinCluster(JoinClusterCommand),
 }
 
 macro_rules! try_from_message_with_payload {
-    ($message:expr, $cmd:expr, $t:ty) => {{
+    ($message:expr, $t:ident) => {{
         (|| {
-            if $message.id != $cmd {
+            if $message.id != $t::cmd_id() {
                 return Err(Error::InvalidRequest {
                     reason: format!(
                         "Unable to construct Get Command from Request. Expected id {} got {}",
-                        $cmd, $message.id
+                        $t::cmd_id(),
+                        $message.id
                     ),
                 });
             }
@@ -96,24 +98,18 @@ impl Command {
         match message.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
             GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
-                message,
-                GET_CMD,
-                get::Get
+                message, GetCommand
             )?)),
             PUT_CMD => Ok(Command::Put(try_from_message_with_payload!(
-                message,
-                PUT_CMD,
-                put::Put
+                message, PutCommand
             )?)),
             CMD_CLUSTER_HEARTBEAT => Ok(Command::Heartbeat(try_from_message_with_payload!(
                 message,
-                CMD_CLUSTER_HEARTBEAT,
-                cluster::heartbeat::Heartbeat
+                HeartbeatCommand
             )?)),
             CMD_CLUSTER_JOIN_CLUSTER => Ok(Command::JoinCluster(try_from_message_with_payload!(
                 message,
-                CMD_CLUSTER_JOIN_CLUSTER,
-                cluster::join_cluster::JoinCluster
+                JoinClusterCommand
             )?)),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", message.id);
