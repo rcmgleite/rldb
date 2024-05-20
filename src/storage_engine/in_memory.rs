@@ -3,14 +3,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use super::StorageEngine;
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemory {
-    inner: Arc<RwLock<HashMap<Bytes, Bytes>>>,
+    inner: Arc<Mutex<HashMap<Bytes, Bytes>>>,
 }
 
 const LOCK_ERR: &str = "Unable to acquire InMemory lock. This should never happen";
@@ -18,7 +18,7 @@ const LOCK_ERR: &str = "Unable to acquire InMemory lock. This should never happe
 #[async_trait]
 impl StorageEngine for InMemory {
     async fn get(&self, key: &Bytes) -> anyhow::Result<Option<Bytes>> {
-        if let Ok(guard) = self.inner.read() {
+        if let Ok(guard) = self.inner.lock() {
             Ok(guard.get(key).map(Clone::clone))
         } else {
             Err(anyhow!(LOCK_ERR))
@@ -26,7 +26,7 @@ impl StorageEngine for InMemory {
     }
 
     async fn put(&self, key: Bytes, value: Bytes) -> anyhow::Result<()> {
-        if let Ok(mut guard) = self.inner.write() {
+        if let Ok(mut guard) = self.inner.lock() {
             guard
                 .entry(key)
                 .and_modify(|e| *e = value.clone())
@@ -38,7 +38,7 @@ impl StorageEngine for InMemory {
     }
 
     async fn delete(&self, key: &Bytes) -> anyhow::Result<()> {
-        if let Ok(mut guard) = self.inner.write() {
+        if let Ok(mut guard) = self.inner.lock() {
             guard.remove(key);
             Ok(())
         } else {
@@ -46,22 +46,12 @@ impl StorageEngine for InMemory {
         }
     }
     async fn keys(&self) -> anyhow::Result<Vec<Bytes>> {
-        if let Ok(guard) = self.inner.read() {
+        if let Ok(guard) = self.inner.lock() {
             Ok(guard.keys().map(Clone::clone).collect())
         } else {
             Err(anyhow!(LOCK_ERR))
         }
     }
-
-    // async fn snapshot(&self) -> anyhow::Result<Self> {
-    //     if let Ok(guard) = self.inner.read() {
-    //         Ok(Self {
-    //             inner: Arc::new(RwLock::new(guard.clone())),
-    //         })
-    //     } else {
-    //         Err(anyhow!(LOCK_ERR))
-    //     }
-    // }
 }
 
 #[cfg(test)]

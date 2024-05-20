@@ -154,12 +154,28 @@ impl Server {
 }
 
 #[instrument(level = "debug")]
-async fn handle_connection(mut tcp_stream: TcpStream, db: Arc<Db>) -> Result<()> {
+async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
     loop {
-        let message = Message::try_from_async_read(&mut tcp_stream).await?;
-        let cmd = Command::try_from_message(message)?;
-        let response = cmd.execute(db.clone()).await.serialize();
-
-        tcp_stream.write_all(&response).await?;
+        // Since [`Error`] is Serialize, in case of an error we can write it back to the client
+        match handle_message(&mut conn, db.clone()).await {
+            Ok(message) => {
+                conn.write_all(&message.serialize()).await?;
+            }
+            Err(err) => {
+                let msg = Message::new(0, Some(Bytes::from(serde_json::to_string(&err).unwrap())));
+                conn.write_all(&msg.serialize()).await?;
+            }
+        }
     }
+}
+
+/// There are some oddities here still
+///  1. parsing a message and a command from a message can return an error
+///    when that happens, the response will be a message with id `0`. This is odd.
+///    makes me believe that maybe the protocol is not great still
+///  2. On the other hand, cmd.execute return a specific Response object per command which includes failure/success cases.
+async fn handle_message(conn: &mut TcpStream, db: Arc<Db>) -> Result<Message> {
+    let message = Message::try_from_async_read(conn).await?;
+    let cmd = Command::try_from_message(message)?;
+    Ok(cmd.execute(db.clone()).await)
 }

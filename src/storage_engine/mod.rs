@@ -12,5 +12,4 @@ pub trait StorageEngine: Debug {
     async fn put(&self, key: Bytes, value: Bytes) -> anyhow::Result<()>;
     async fn delete(&self, key: &Bytes) -> anyhow::Result<()>;
     async fn keys(&self) -> anyhow::Result<Vec<Bytes>>;
-    // async fn snapshot(&self) -> anyhow::Result<Self>;
 }
