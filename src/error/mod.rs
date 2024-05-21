@@ -9,7 +9,7 @@ pub enum Error {
     NotFound { key: String },
     InvalidRequest { reason: String },
     InvalidServerConfig { reason: String },
-    Internal,
+    Internal(Internal),
     Io { reason: String },
     Generic { reason: String },
 }
@@ -36,4 +36,16 @@ impl From<anyhow::Error> for Error {
             reason: err.to_string(),
         }
     }
+}
+
+impl From<crate::storage_engine::Error> for Error {
+    fn from(err: crate::storage_engine::Error) -> Self {
+        Self::Internal(Internal::StorageEngine(err))
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub enum Internal {
+    Unknown,
+    StorageEngine(crate::storage_engine::Error),
 }

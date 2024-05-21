@@ -1,7 +1,10 @@
 use bytes::Bytes;
 use std::sync::Arc;
 
-use crate::cluster::ring_state::{Node, RingState};
+use crate::{
+    cluster::ring_state::{Node, RingState},
+    error::Result,
+};
 
 pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + Sync + 'static>;
 
@@ -34,12 +37,12 @@ impl Db {
         }
     }
 
-    pub async fn put(&self, key: Bytes, value: Bytes) -> anyhow::Result<()> {
-        self.storage_engine.put(key, value).await
+    pub async fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
+        Ok(self.storage_engine.put(key, value).await?)
     }
 
-    pub async fn get(&self, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
-        self.storage_engine.get(key).await
+    pub async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        Ok(self.storage_engine.get(key).await?)
     }
 
     pub fn owns_key(&self, key: &[u8]) -> OwnsKeyResponse {
@@ -57,10 +60,10 @@ impl Db {
         }
     }
 
-    pub fn update_ring_state(&self, nodes: Vec<Node>) -> anyhow::Result<()> {
+    pub fn update_ring_state(&self, nodes: Vec<Node>) -> Result<()> {
         if let Some(partitioning_scheme) = self.partitioning_scheme.clone() {
             let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-            ring_state.merge_nodes(nodes)
+            Ok(ring_state.merge_nodes(nodes)?)
         } else {
             Ok(())
         }

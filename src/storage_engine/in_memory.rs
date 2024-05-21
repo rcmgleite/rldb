@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::{
@@ -6,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::StorageEngine;
+use super::{Error, Result, StorageEngine};
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemory {
@@ -17,15 +16,17 @@ const LOCK_ERR: &str = "Unable to acquire InMemory lock. This should never happe
 
 #[async_trait]
 impl StorageEngine for InMemory {
-    async fn get(&self, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         if let Ok(guard) = self.inner.lock() {
             Ok(guard.get(key).map(Clone::clone))
         } else {
-            Err(anyhow!(LOCK_ERR))
+            Err(Error::Logic {
+                reason: LOCK_ERR.to_string(),
+            })
         }
     }
 
-    async fn put(&self, key: Bytes, value: Bytes) -> anyhow::Result<()> {
+    async fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
         if let Ok(mut guard) = self.inner.lock() {
             guard
                 .entry(key)
@@ -33,23 +34,29 @@ impl StorageEngine for InMemory {
                 .or_insert(value);
             Ok(())
         } else {
-            Err(anyhow!(LOCK_ERR))
+            Err(Error::Logic {
+                reason: LOCK_ERR.to_string(),
+            })
         }
     }
 
-    async fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
+    async fn delete(&self, key: &[u8]) -> Result<()> {
         if let Ok(mut guard) = self.inner.lock() {
             guard.remove(key);
             Ok(())
         } else {
-            Err(anyhow!(LOCK_ERR))
+            Err(Error::Logic {
+                reason: LOCK_ERR.to_string(),
+            })
         }
     }
-    async fn keys(&self) -> anyhow::Result<Vec<Bytes>> {
+    async fn keys(&self) -> Result<Vec<Bytes>> {
         if let Ok(guard) = self.inner.lock() {
             Ok(guard.keys().map(Clone::clone).collect())
         } else {
-            Err(anyhow!(LOCK_ERR))
+            Err(Error::Logic {
+                reason: LOCK_ERR.to_string(),
+            })
         }
     }
 }
