@@ -26,6 +26,10 @@ pub struct RingStateMessagePayload {
     nodes: Vec<JsonSerializableNode>,
 }
 
+/// This is basically the same as [`Node`] but with a [`String`]`
+/// as key instead of [`bytes::Bytes`].
+/// This is needed because we use JSON as serialization scheme for network calls
+/// and we can't serialize bytes into json.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JsonSerializableNode {
     pub addr: String,
@@ -58,6 +62,8 @@ impl From<JsonSerializableNode> for Node {
 /// 2. send a heartbeat message to the target node (which includes the current node view of the ring)
 /// 3. Receive a heartbeat response (ACK OR FAILURE)
 /// 4. loop forever picking a random node of the ring every X seconds and performing steps 2 through 3 again
+///
+/// TODO: This is gonna be a tough one to write good tests for
 pub async fn start_heartbeat(cluster_state: Arc<State>) {
     let mut cluster_connections = HashMap::new();
 
@@ -140,4 +146,9 @@ pub async fn start_heartbeat(cluster_state: Arc<State>) {
             event!(Level::DEBUG, "heartbeat cycle finished {:?}", cluster_state);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // TODO
 }
