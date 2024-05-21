@@ -2,70 +2,66 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use super::{Error, Result, StorageEngine};
 
+type Store = HashMap<Bytes, Bytes>;
+
 #[derive(Clone, Debug, Default)]
 pub struct InMemory {
-    inner: Arc<Mutex<HashMap<Bytes, Bytes>>>,
+    inner: Arc<Mutex<Store>>,
 }
 
-const LOCK_ERR: &str = "Unable to acquire InMemory lock. This should never happen";
+impl InMemory {
+    fn acquire_lock(&self) -> Result<MutexGuard<Store>> {
+        match self.inner.lock() {
+            Ok(guard) => Ok(guard),
+            Err(_) => Err(Error::Logic {
+                reason: "Unable to acquire lock for InMemory storage engine - poisoned..."
+                    .to_string(),
+            }),
+        }
+    }
+}
 
 #[async_trait]
 impl StorageEngine for InMemory {
     async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if let Ok(guard) = self.inner.lock() {
-            Ok(guard.get(key).map(Clone::clone))
-        } else {
-            Err(Error::Logic {
-                reason: LOCK_ERR.to_string(),
-            })
-        }
+        let guard = self.acquire_lock()?;
+        Ok(guard.get(key).map(Clone::clone))
     }
 
     async fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard
-                .entry(key)
-                .and_modify(|e| *e = value.clone())
-                .or_insert(value);
-            Ok(())
-        } else {
-            Err(Error::Logic {
-                reason: LOCK_ERR.to_string(),
-            })
-        }
+        let mut guard = self.acquire_lock()?;
+        guard
+            .entry(key)
+            .and_modify(|e| *e = value.clone())
+            .or_insert(value);
+        Ok(())
     }
 
     async fn delete(&self, key: &[u8]) -> Result<()> {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.remove(key);
-            Ok(())
-        } else {
-            Err(Error::Logic {
-                reason: LOCK_ERR.to_string(),
-            })
-        }
+        let mut guard = self.acquire_lock()?;
+        guard.remove(key);
+        Ok(())
     }
     async fn keys(&self) -> Result<Vec<Bytes>> {
-        if let Ok(guard) = self.inner.lock() {
-            Ok(guard.keys().map(Clone::clone).collect())
-        } else {
-            Err(Error::Logic {
-                reason: LOCK_ERR.to_string(),
-            })
-        }
+        let guard = self.acquire_lock()?;
+        Ok(guard.keys().map(Clone::clone).collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::InMemory;
     use crate::storage_engine::StorageEngine;
     use bytes::Bytes;
+    use quickcheck::Arbitrary;
+    use rand::{distributions::Alphanumeric, Rng};
 
     #[tokio::test]
     async fn put_get_delete() {
@@ -78,5 +74,109 @@ mod tests {
 
         store.delete(&key).await.unwrap();
         assert!(store.get(&key).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn override_key() {
+        let store = InMemory::default();
+        let key = Bytes::from("key");
+        let value1 = Bytes::from("value");
+        let value2 = Bytes::from("value2");
+
+        store.put(key.clone(), value1.clone()).await.unwrap();
+        assert_eq!(store.get(&key).await.unwrap().unwrap(), value1);
+
+        store.put(key.clone(), value2.clone()).await.unwrap();
+        assert_eq!(store.get(&key).await.unwrap().unwrap(), value2);
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestInput {
+        key_values_thread_1: Vec<String>,
+        key_values_thread_2: Vec<String>,
+        key_values_thread_3: Vec<String>,
+    }
+
+    fn generate_random_ascii_string(range_size: Range<usize>) -> String {
+        let string_size = rand::thread_rng().gen_range(range_size);
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(string_size)
+            .map(char::from)
+            .collect()
+    }
+    fn generate_random_deduped_string_keys(n_keys: usize) -> Vec<String> {
+        let mut nodes = Vec::with_capacity(n_keys);
+        for _ in 0..n_keys {
+            nodes.push(generate_random_ascii_string(10..20))
+        }
+        nodes.sort();
+        nodes.dedup_by(|a, b| a.eq_ignore_ascii_case(&b));
+        nodes
+    }
+
+    impl Arbitrary for TestInput {
+        fn arbitrary(_: &mut quickcheck::Gen) -> Self {
+            let keys = generate_random_deduped_string_keys(600);
+
+            Self {
+                key_values_thread_1: Vec::from(&keys[0..200]),
+                key_values_thread_2: Vec::from(&keys[200..400]),
+                key_values_thread_3: Vec::from(&keys[400..600]),
+            }
+        }
+    }
+
+    async fn put_get(store: InMemory, items: Vec<String>) -> anyhow::Result<usize> {
+        let mut items_added = 0;
+
+        for key in items.iter() {
+            let key = Bytes::from(key.clone());
+            store.put(key.clone(), key.clone()).await?;
+            assert_eq!(store.get(&key).await?.unwrap(), key);
+            items_added += 1;
+        }
+
+        Ok(items_added)
+    }
+
+    // This is kind of a dumb test.. it just asserts that
+    //  1. concurrent puts/get don't hang due to bad mutex usage
+    //  2. all items that were supposed to be added are added
+    //  3. the key value pairs match
+    #[quickcheck_async::tokio]
+    async fn concurrency_test_put_get(input: TestInput) {
+        let store = InMemory::default();
+        let h1 = {
+            let store = store.clone();
+            let input = input.key_values_thread_1.clone();
+            tokio::spawn(put_get(store, input))
+        };
+
+        let h2 = {
+            let store = store.clone();
+            let input = input.key_values_thread_2.clone();
+            tokio::spawn(put_get(store, input))
+        };
+
+        let h3 = {
+            let store = store.clone();
+            let input = input.key_values_thread_3.clone();
+            tokio::spawn(put_get(store, input))
+        };
+
+        let (r1, r2, r3) = tokio::join!(h1, h2, h3);
+        let h1_items_added = r1.unwrap().unwrap();
+        let h2_items_added = r2.unwrap().unwrap();
+        let h3_items_added = r3.unwrap().unwrap();
+        let total = h1_items_added + h2_items_added + h3_items_added;
+
+        assert_eq!(
+            total,
+            input.key_values_thread_1.len()
+                + input.key_values_thread_2.len()
+                + input.key_values_thread_3.len()
+        );
+        assert_eq!(store.keys().await.unwrap().len(), total,);
     }
 }

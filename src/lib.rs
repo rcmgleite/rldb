@@ -8,6 +8,10 @@ pub mod storage_engine;
 
 #[cfg(test)]
 extern crate quickcheck;
+
+#[cfg(test)]
+extern crate quickcheck_async;
+
 #[cfg(test)]
 #[macro_use(quickcheck)]
 extern crate quickcheck_macros;
