@@ -30,17 +30,15 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<anyhow::Error> for Error {
-    fn from(err: anyhow::Error) -> Self {
-        Self::Generic {
-            reason: err.to_string(),
-        }
-    }
-}
-
 impl From<crate::storage_engine::Error> for Error {
     fn from(err: crate::storage_engine::Error) -> Self {
         Self::Internal(Internal::StorageEngine(err))
+    }
+}
+
+impl From<crate::cluster::error::Error> for Error {
+    fn from(err: crate::cluster::error::Error) -> Self {
+        Self::Internal(Internal::Cluster(err))
     }
 }
 
@@ -48,4 +46,5 @@ impl From<crate::storage_engine::Error> for Error {
 pub enum Internal {
     Unknown,
     StorageEngine(crate::storage_engine::Error),
+    Cluster(crate::cluster::error::Error),
 }

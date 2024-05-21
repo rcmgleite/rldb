@@ -45,18 +45,18 @@ impl Db {
         Ok(self.storage_engine.get(key).await?)
     }
 
-    pub fn owns_key(&self, key: &[u8]) -> OwnsKeyResponse {
+    pub fn owns_key(&self, key: &[u8]) -> Result<OwnsKeyResponse> {
         if let Some(partitioning_scheme) = self.partitioning_scheme.clone() {
             let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-            if ring_state.owns_key(key) {
-                OwnsKeyResponse::True
+            if ring_state.owns_key(key)? {
+                Ok(OwnsKeyResponse::True)
             } else {
-                OwnsKeyResponse::False {
+                Ok(OwnsKeyResponse::False {
                     addr: ring_state.key_owner(key).unwrap().addr.clone(),
-                }
+                })
             }
         } else {
-            OwnsKeyResponse::True
+            Ok(OwnsKeyResponse::True)
         }
     }
 

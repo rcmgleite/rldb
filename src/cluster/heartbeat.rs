@@ -67,9 +67,22 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
         event!(Level::DEBUG, "heartbeat loop starting: {:?}", ring_state);
 
         // tick (ie: update your own state)
-        ring_state.tick();
+        if let Err(err) = ring_state.tick() {
+            event!(
+                Level::WARN,
+                "Unable to tick it's clock. Skipping heartbeat cycle reason: {}",
+                err
+            );
+            continue;
+        }
 
-        let target_node = ring_state.get_random_node();
+        let target_node = match ring_state.get_random_node() {
+            Ok(node) => node,
+            Err(err) => {
+                event!(Level::WARN, "heartbeat function failed to retrieve a random ring node. This should not happening.. skipping cycle for now. reason: {}", err);
+                continue;
+            }
+        };
 
         // It doesn't make sense to heartbeat to self... let's pick some other node...
         if target_node.addr == ring_state.own_addr() {
@@ -91,7 +104,9 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
                         err
                     );
 
-                    ring_state.mark_node_as_possibly_offline(target_node);
+                    if let Err(err) = ring_state.mark_node_as_possibly_offline(target_node) {
+                        event!(Level::WARN, "Unable to mark node as offline: {}", err);
+                    }
 
                     continue;
                 }
@@ -102,7 +117,15 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
             cluster_connections.get_mut(&target_node.addr).unwrap()
         };
 
-        if let Err(err) = conn.heartbeat(ring_state.get_nodes()).await {
+        let known_nodes = match ring_state.get_nodes() {
+            Ok(nodes) => nodes,
+            Err(err) => {
+                event!(Level::WARN, "heartbeat function failed to retrieve nodes. This should never happen.. skipping cycle for now. reason: {}", err);
+                continue;
+            }
+        };
+
+        if let Err(err) = conn.heartbeat(known_nodes).await {
             event!(
                 Level::WARN,
                 "Unable to connect to node {:?} - err {:?}",
@@ -110,7 +133,9 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
                 err
             );
             cluster_connections.remove(&target_node.addr);
-            ring_state.mark_node_as_possibly_offline(target_node);
+            if let Err(err) = ring_state.mark_node_as_possibly_offline(target_node) {
+                event!(Level::WARN, "Unable to mark node as offline: {}", err);
+            }
         } else {
             event!(Level::DEBUG, "heartbeat cycle finished {:?}", ring_state);
         }

@@ -20,7 +20,7 @@ impl Get {
     }
 
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
-        if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes()) {
+        if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes())? {
             return Err(Error::InvalidRequest {
                 reason: format!(
                     "Key owned by another node. Redirect request to node {:?}",

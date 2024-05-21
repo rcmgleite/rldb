@@ -1,6 +1,7 @@
+use crate::cluster::error::{Error, Result};
 use bytes::Bytes;
 use murmur3::murmur3_x86_128;
-use std::{fmt::Display, io::Cursor};
+use std::io::Cursor;
 
 /// Let's force the usage of Hash functions that return u128 for now..
 type HashFunctionReturnType = u128;
@@ -105,22 +106,6 @@ impl ConsistentHashing {
 pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
     murmur3_x86_128(&mut Cursor::new(key), 0).unwrap()
 }
-
-#[derive(Debug)]
-pub enum Error {
-    Internal { reason: String },
-    Logic { reason: String },
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl std::error::Error for Error {}
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
