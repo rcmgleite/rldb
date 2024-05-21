@@ -1,3 +1,14 @@
+//! This file contains the [`State`] data structure.
+//! This structure is responsible for holding the cluster state at any given time.
+//! It owns the [`PartitioningScheme`] provided during construction and delegates
+//! queries like: Which node owns a given key to it.
+//!
+//! This structure is also responsible for storing the state for each node in the cluster.
+//! By querying this structure, a caller is able to know if a node is healthy or not and, therefore,
+//! decide to skip faulty hosts entirely.
+//!
+//! Currently, the state is updated via a gossip protocol in which nodes exchange their view of the cluster
+//! to every other host. For more info, see the docs for [`super::heartbeat`].
 use bytes::Bytes;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -50,13 +61,18 @@ pub struct State {
     inner: Arc<Mutex<StateInner>>,
 }
 
-#[derive(Debug)]
 struct StateInner {
     // Which nodes are part of the ring
     nodes: HashMap<Bytes, Node>,
     // Partitioning scheme
     // TODO: Find a way to inject this instead of hardcoding it..
     partitioning_scheme: Box<dyn PartitioningScheme + Send>,
+}
+
+impl std::fmt::Debug for StateInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.nodes)
+    }
 }
 
 impl State {

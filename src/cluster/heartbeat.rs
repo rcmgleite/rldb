@@ -3,15 +3,16 @@
 //! that will be used to:
 //!   1. Node discovery
 //!     Every node that joins a running rldb cluster will learn about the other nodes via this protocol
-//!     Nodes exchange they IP/PORT part, which is currently used as key to determine which part of the
-//!     partition ring every node holds.
+//!     Nodes exchange they IP/PORT part, which is currently used as key to determine which which partition it owns.
 //!     With this information, every node can determine the correct owner of any given key.
 //!     This can also be used to determine which nodes in the ring will contain replicas of the key being added.
-//!     For now, we replica the data to the 2 next nodes on the ring.
 //!   2. Evaluate nodes health
-//!     This happens by each node randomly choosing another 2 nodes to ping every 1 second (configurable)
+//!     This happens by each node randomly choosing X nodes to ping every Y seconds (configurable).
 //!     Hosts that are unreachable or respond with anything other than success are marked as
 //!     [`NodeStatus::PossiblyOffline`]
+//!     Note: Node are never automatically removed from the cluster. This requires an operator to manually intervene.
+//!     The reason for that is that reshuffling partitions can be quite expensive (even when using schemes like consistent hashing).
+//!     So we deliberately chose to let an operator make that decision instead of having automatic detection.
 use std::{collections::HashMap, sync::Arc};
 
 use crate::client;
