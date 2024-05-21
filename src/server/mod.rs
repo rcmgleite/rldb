@@ -8,9 +8,10 @@
 //!  2. The Request protocol
 //!    - currently a simple header (cmd,length) and a json encoded payload
 use crate::cluster::heartbeat::start_heartbeat;
-use crate::cluster::ring_state::RingState;
+use crate::cluster::partitioning::consistent_hashing::ConsistentHashing;
+use crate::cluster::state::State;
 use crate::cmd::Command;
-use crate::db::{Db, PartitioningScheme};
+use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use bytes::Bytes;
@@ -82,8 +83,10 @@ impl Server {
                     config::PartitioningScheme::ConsistentHashing => {
                         // let own_addr = Bytes::from(local_ip().unwrap().to_string());
                         let own_addr = Bytes::from(format!("127.0.0.1:{}", gossip.port));
-                        let ring_state = RingState::new(own_addr)?;
-                        Arc::new(PartitioningScheme::ConsistentHashing(ring_state))
+                        Arc::new(State::new(
+                            Box::new(ConsistentHashing::default()),
+                            own_addr,
+                        )?)
                     }
                 };
 

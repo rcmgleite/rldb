@@ -14,9 +14,9 @@
 //!     [`NodeStatus::PossiblyOffline`]
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{client, db::PartitioningScheme};
+use crate::client;
 
-use super::ring_state::{Node, NodeStatus};
+use super::state::{Node, NodeStatus, State};
 use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
 
@@ -57,17 +57,16 @@ impl From<JsonSerializableNode> for Node {
 /// 2. send a heartbeat message to the target node (which includes the current node view of the ring)
 /// 3. Receive a heartbeat response (ACK OR FAILURE)
 /// 4. loop forever picking a random node of the ring every X seconds and performing steps 2 through 3 again
-pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
-    let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
+pub async fn start_heartbeat(cluster_state: Arc<State>) {
     let mut cluster_connections = HashMap::new();
 
     // Now we loop every X seconds to hearbeat to one node in the cluster
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        event!(Level::DEBUG, "heartbeat loop starting: {:?}", ring_state);
+        event!(Level::DEBUG, "heartbeat loop starting: {:?}", cluster_state);
 
         // tick (ie: update your own state)
-        if let Err(err) = ring_state.tick() {
+        if let Err(err) = cluster_state.tick() {
             event!(
                 Level::WARN,
                 "Unable to tick it's clock. Skipping heartbeat cycle reason: {}",
@@ -76,7 +75,7 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
             continue;
         }
 
-        let target_node = match ring_state.get_random_node() {
+        let target_node = match cluster_state.get_random_node() {
             Ok(node) => node,
             Err(err) => {
                 event!(Level::WARN, "heartbeat function failed to retrieve a random ring node. This should not happening.. skipping cycle for now. reason: {}", err);
@@ -85,7 +84,7 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
         };
 
         // It doesn't make sense to heartbeat to self... let's pick some other node...
-        if target_node.addr == ring_state.own_addr() {
+        if target_node.addr == cluster_state.own_addr() {
             event!(Level::DEBUG, "skipping heatbeat to self");
             continue;
         }
@@ -104,7 +103,7 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
                         err
                     );
 
-                    if let Err(err) = ring_state.mark_node_as_possibly_offline(target_node) {
+                    if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node) {
                         event!(Level::WARN, "Unable to mark node as offline: {}", err);
                     }
 
@@ -117,7 +116,7 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
             cluster_connections.get_mut(&target_node.addr).unwrap()
         };
 
-        let known_nodes = match ring_state.get_nodes() {
+        let known_nodes = match cluster_state.get_nodes() {
             Ok(nodes) => nodes,
             Err(err) => {
                 event!(Level::WARN, "heartbeat function failed to retrieve nodes. This should never happen.. skipping cycle for now. reason: {}", err);
@@ -133,11 +132,11 @@ pub async fn start_heartbeat(partitioning_scheme: Arc<PartitioningScheme>) {
                 err
             );
             cluster_connections.remove(&target_node.addr);
-            if let Err(err) = ring_state.mark_node_as_possibly_offline(target_node) {
+            if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node) {
                 event!(Level::WARN, "Unable to mark node as offline: {}", err);
             }
         } else {
-            event!(Level::DEBUG, "heartbeat cycle finished {:?}", ring_state);
+            event!(Level::DEBUG, "heartbeat cycle finished {:?}", cluster_state);
         }
     }
 }

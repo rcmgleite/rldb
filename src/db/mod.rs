@@ -2,7 +2,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 use crate::{
-    cluster::ring_state::{Node, RingState},
+    cluster::state::{Node, State},
     error::Result,
 };
 
@@ -14,11 +14,11 @@ pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + S
 /// be updated later on..
 #[derive(Debug)]
 pub struct Db {
-    /// the underlaying storage engine
+    /// The underlaying storage engine
     storage_engine: StorageEngine,
-    /// the partition scheme (if any)
+    /// Cluster state.
     /// This will be present if this is configured as a cluster node
-    partitioning_scheme: Option<Arc<PartitioningScheme>>,
+    cluster_state: Option<Arc<State>>,
 }
 
 pub enum OwnsKeyResponse {
@@ -27,13 +27,10 @@ pub enum OwnsKeyResponse {
 }
 
 impl Db {
-    pub fn new(
-        storage_engine: StorageEngine,
-        partitioning_scheme: Option<Arc<PartitioningScheme>>,
-    ) -> Self {
+    pub fn new(storage_engine: StorageEngine, cluster_state: Option<Arc<State>>) -> Self {
         Self {
             storage_engine,
-            partitioning_scheme,
+            cluster_state,
         }
     }
 
@@ -46,13 +43,12 @@ impl Db {
     }
 
     pub fn owns_key(&self, key: &[u8]) -> Result<OwnsKeyResponse> {
-        if let Some(partitioning_scheme) = self.partitioning_scheme.clone() {
-            let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-            if ring_state.owns_key(key)? {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            if cluster_state.owns_key(key)? {
                 Ok(OwnsKeyResponse::True)
             } else {
                 Ok(OwnsKeyResponse::False {
-                    addr: ring_state.key_owner(key).unwrap().addr.clone(),
+                    addr: cluster_state.key_owner(key).unwrap().addr.clone(),
                 })
             }
         } else {
@@ -60,22 +56,13 @@ impl Db {
         }
     }
 
-    pub fn update_ring_state(&self, nodes: Vec<Node>) -> Result<()> {
-        if let Some(partitioning_scheme) = self.partitioning_scheme.clone() {
-            let PartitioningScheme::ConsistentHashing(ring_state) = partitioning_scheme.as_ref();
-            Ok(ring_state.merge_nodes(nodes)?)
+    pub fn update_cluster_state(&self, nodes: Vec<Node>) -> Result<()> {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            Ok(cluster_state.merge_nodes(nodes)?)
         } else {
             Ok(())
         }
     }
-}
-
-/// TODO: [`RingState`] is 100% coupled with ConsistentHashing. We should remodel that
-/// and create a common interface so that when we decide to add new Partitioning schemes we don't
-/// have to refactor the entire thing.
-#[derive(Debug)]
-pub enum PartitioningScheme {
-    ConsistentHashing(RingState),
 }
 
 #[cfg(test)]

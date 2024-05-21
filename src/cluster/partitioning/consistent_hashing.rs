@@ -3,10 +3,10 @@ use bytes::Bytes;
 use murmur3::murmur3_x86_128;
 use std::io::Cursor;
 
+use super::PartitioningScheme;
+
 /// Let's force the usage of Hash functions that return u128 for now..
 type HashFunctionReturnType = u128;
-
-pub type ConsistentHashKey = Bytes;
 
 /// ConsistentHashing is one of the partitioning schemes implemented for rldb.
 /// The goal of consistent hashing is to enable a distributed system to decide
@@ -38,8 +38,8 @@ pub type ConsistentHashKey = Bytes;
 ///     Since we are going to hash fairly small byte slices here (usually an ip/port) pair, this is not a problem.
 #[derive(Clone, Debug)]
 pub struct ConsistentHashing {
-    nodes: Vec<ConsistentHashKey>,
-    keys: Vec<HashFunctionReturnType>,
+    nodes: Vec<Bytes>,
+    hashes: Vec<HashFunctionReturnType>,
     hash_fn: fn(&[u8]) -> HashFunctionReturnType,
 }
 
@@ -47,7 +47,7 @@ impl Default for ConsistentHashing {
     fn default() -> Self {
         Self {
             nodes: Default::default(),
-            keys: Default::default(),
+            hashes: Default::default(),
             hash_fn: murmur3_hash,
         }
     }
@@ -56,37 +56,37 @@ impl Default for ConsistentHashing {
 impl ConsistentHashing {
     pub fn new_with_hash_fn(hash_fn: fn(&[u8]) -> HashFunctionReturnType) -> Self {
         Self {
-            keys: Vec::new(),
+            hashes: Vec::new(),
             nodes: Vec::new(),
             hash_fn,
         }
     }
+}
 
-    /// Adds a new node to the hash ring
-    pub fn add_node(&mut self, node: Bytes) -> Result<HashFunctionReturnType> {
+impl PartitioningScheme for ConsistentHashing {
+    fn add_node(&mut self, node: Bytes) -> Result<()> {
         let node_hash = (self.hash_fn)(&node);
-        match self.keys.binary_search(&node_hash) {
+        match self.hashes.binary_search(&node_hash) {
             Ok(_) =>return Err(Error::Internal { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() }),
             Err(index) => {
-                self.keys.insert(index, node_hash);
+                self.hashes.insert(index, node_hash);
                 self.nodes.insert(index, node);
-                return Ok(index as HashFunctionReturnType)
+                return Ok(())
             }
         }
     }
 
-    /// Removes an existing node from the hash ring
-    pub fn remove_node(&mut self, node: &[u8]) {
+    fn remove_node(&mut self, node: &[u8]) -> Result<()> {
         let node_hash = (self.hash_fn)(node);
-        if let Ok(index) = self.keys.binary_search(&node_hash) {
-            self.keys.remove(index);
+        if let Ok(index) = self.hashes.binary_search(&node_hash) {
+            self.hashes.remove(index);
             self.nodes.remove(index);
         }
+
+        Ok(())
     }
 
-    /// Finds the owner [`Node`] of a given key
-    /// Returns an error if the current ConsistentHash instance doesn't have at least one [`Node`]
-    pub fn key_owner(&self, key: &[u8]) -> Result<ConsistentHashKey> {
+    fn key_owner(&self, key: &[u8]) -> Result<Bytes> {
         if self.nodes.is_empty() {
             return Err(Error::Logic {
                 reason: "Can't ask for owner if no nodes are present".to_string(),
@@ -94,7 +94,7 @@ impl ConsistentHashing {
         }
 
         let key_hash = (self.hash_fn)(key);
-        let index = self.keys.partition_point(|elem| *elem < key_hash) % self.nodes.len();
+        let index = self.hashes.partition_point(|elem| *elem < key_hash) % self.nodes.len();
 
         Ok(self.nodes[index].clone())
     }
@@ -110,7 +110,10 @@ pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
 #[cfg(test)]
 mod tests {
     use super::ConsistentHashing;
-    use crate::cluster::consistent_hashing::{murmur3_hash, HashFunctionReturnType};
+    use crate::cluster::partitioning::{
+        consistent_hashing::{murmur3_hash, HashFunctionReturnType},
+        PartitioningScheme,
+    };
     use bytes::Bytes;
     use quickcheck::{quickcheck, Arbitrary};
     use rand::{distributions::Alphanumeric, Rng};
@@ -195,22 +198,22 @@ mod tests {
 
         // now compute the hashes manually, construct a vector and sort it.
         // This has to be the same as ring.keys
-        let mut nodes_key: Vec<HashFunctionReturnType> = test_input
+        let mut nodes_hashes: Vec<HashFunctionReturnType> = test_input
             .nodes
             .iter()
             .map(|e| murmur3_hash(&e.addr))
             .collect();
-        nodes_key.sort();
+        nodes_hashes.sort();
 
         // ring.keys contains all keys and it's sorted
-        assert_eq!(ring.keys.len(), test_input.nodes.len());
-        assert_eq!(ring.keys, nodes_key);
+        assert_eq!(ring.hashes.len(), test_input.nodes.len());
+        assert_eq!(ring.hashes, nodes_hashes);
         assert_eq!(ring.nodes.len(), test_input.nodes.len());
 
         // now make sure that the ring.keys and ring.nodes are synchronized
         // AND that they contain all nodes provided by test_input
         for i in 0..test_input.nodes.len() {
-            assert_eq!(node_hash_mapping[&ring.keys[i]], ring.nodes[i]);
+            assert_eq!(node_hash_mapping[&ring.hashes[i]], ring.nodes[i]);
         }
     }
 
@@ -548,7 +551,7 @@ mod tests {
         }
 
         // now let's remove node A and make sure all keys belong to node B
-        ring.remove_node(&nodes[0].addr);
+        ring.remove_node(&nodes[0].addr).unwrap();
         for key in keys.iter() {
             assert_eq!(nodes[1].addr, ring.key_owner(&key).unwrap());
         }

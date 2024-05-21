@@ -7,8 +7,8 @@ use std::{
 };
 
 use super::{
-    consistent_hashing::ConsistentHashing,
     error::{Error, Result},
+    partitioning::PartitioningScheme,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -45,23 +45,25 @@ impl Node {
 
 // Note: This interior mutability pattern is useful but the mutex usage in this file is horrible..
 #[derive(Clone, Debug)]
-pub struct RingState {
+pub struct State {
     own_addr: Bytes,
-    inner: Arc<Mutex<RingStateInner>>,
+    inner: Arc<Mutex<StateInner>>,
 }
 
 #[derive(Debug)]
-struct RingStateInner {
+struct StateInner {
     // Which nodes are part of the ring
     nodes: HashMap<Bytes, Node>,
     // Partitioning scheme
     // TODO: Find a way to inject this instead of hardcoding it..
-    partitioning_scheme: ConsistentHashing,
+    partitioning_scheme: Box<dyn PartitioningScheme + Send>,
 }
 
-impl RingState {
-    pub fn new(own_addr: Bytes) -> Result<Self> {
-        let mut partitioning_scheme = ConsistentHashing::default();
+impl State {
+    pub fn new(
+        mut partitioning_scheme: Box<dyn PartitioningScheme + Send>,
+        own_addr: Bytes,
+    ) -> Result<Self> {
         partitioning_scheme.add_node(own_addr.clone())?;
         let mut nodes = HashMap::new();
         nodes.insert(
@@ -75,14 +77,14 @@ impl RingState {
 
         Ok(Self {
             own_addr,
-            inner: Arc::new(Mutex::new(RingStateInner {
+            inner: Arc::new(Mutex::new(StateInner {
                 nodes,
                 partitioning_scheme,
             })),
         })
     }
 
-    fn acquire_lock(&self) -> Result<MutexGuard<RingStateInner>> {
+    fn acquire_lock(&self) -> Result<MutexGuard<StateInner>> {
         if let Ok(guard) = self.inner.lock() {
             Ok(guard)
         } else {
@@ -129,7 +131,7 @@ impl RingState {
                         // Node was actually removed. Let's drop it from our view of the cluster
                         NodeStatus::Offline => {
                             inner_guard.nodes.remove(&node.addr);
-                            inner_guard.partitioning_scheme.remove_node(&node.addr);
+                            inner_guard.partitioning_scheme.remove_node(&node.addr)?;
                         }
                         // Otherwise, let's update tick and status
                         NodeStatus::PossiblyOffline | NodeStatus::Ok => {

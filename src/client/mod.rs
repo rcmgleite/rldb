@@ -4,7 +4,7 @@ use tokio::{
 };
 
 use crate::{
-    cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
+    cluster::{heartbeat::JsonSerializableNode, state::Node},
     cmd::{self},
     server::message::Message,
 };

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cluster::{heartbeat::JsonSerializableNode, ring_state::Node},
+    cluster::{heartbeat::JsonSerializableNode, state::Node},
     db::Db,
     error::Result,
     server::message::IntoMessage,
@@ -31,7 +31,7 @@ impl Heartbeat {
     // main problem is the json format not being able to serialize bytes::Bytes
     pub async fn execute(self, db: Arc<Db>) -> Result<HeartbeatResponse> {
         let nodes: Vec<Node> = self.nodes.iter().map(|e| Node::from(e.clone())).collect();
-        db.update_ring_state(nodes)?;
+        db.update_cluster_state(nodes)?;
 
         Ok(HeartbeatResponse {
             message: "Ok".to_string(),
