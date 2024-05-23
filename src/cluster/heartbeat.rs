@@ -17,44 +17,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::client;
 
-use super::state::{Node, NodeStatus, State};
+use super::state::{Node, State};
 use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
 
 #[derive(Serialize, Deserialize)]
 pub struct RingStateMessagePayload {
-    nodes: Vec<JsonSerializableNode>,
-}
-
-/// This is basically the same as [`Node`] but with a [`String`]`
-/// as key instead of [`bytes::Bytes`].
-/// This is needed because we use JSON as serialization scheme for network calls
-/// and we can't serialize bytes into json.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct JsonSerializableNode {
-    pub addr: String,
-    status: NodeStatus,
-    tick: u128,
-}
-
-impl From<Node> for JsonSerializableNode {
-    fn from(node: Node) -> Self {
-        Self {
-            addr: String::from_utf8_lossy(&node.addr).into(),
-            status: node.status,
-            tick: node.tick,
-        }
-    }
-}
-
-impl From<JsonSerializableNode> for Node {
-    fn from(node: JsonSerializableNode) -> Self {
-        Self {
-            addr: node.addr.into(),
-            status: node.status,
-            tick: node.tick,
-        }
-    }
+    nodes: Vec<Node>,
 }
 
 /// Start heartbeat will

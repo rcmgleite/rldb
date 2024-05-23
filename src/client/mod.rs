@@ -4,7 +4,7 @@ use tokio::{
 };
 
 use crate::{
-    cluster::{heartbeat::JsonSerializableNode, state::Node},
+    cluster::state::Node,
     cmd::{self},
     server::message::Message,
 };
@@ -51,12 +51,7 @@ impl DbClient {
     }
 
     pub async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> anyhow::Result<serde_json::Value> {
-        let serializible_nodes = known_nodes
-            .into_iter()
-            .map(JsonSerializableNode::from)
-            .collect();
-
-        let cmd = cmd::cluster::heartbeat::Heartbeat::new(serializible_nodes);
+        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
         let req = Message::from(cmd).serialize();
 
         self.stream.write_all(&req).await?;
