@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use rldb::client::DbClient;
 use tokio::io::AsyncWriteExt;
@@ -23,7 +24,7 @@ enum Commands {
         port: u16,
 
         #[arg(short)]
-        key: String,
+        key: Bytes,
     },
     #[command()]
     Put {
@@ -31,10 +32,10 @@ enum Commands {
         port: u16,
 
         #[arg(short)]
-        key: String,
+        key: Bytes,
 
         #[arg(short)]
-        value: String,
+        value: Bytes,
     },
     #[command()]
     JoinCluster {

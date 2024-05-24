@@ -6,21 +6,23 @@ use serde::{Deserialize, Serialize};
 use crate::db::{Db, OwnsKeyResponse};
 use crate::error::{Error, Result};
 use crate::server::message::IntoMessage;
+use crate::utils::serde_utf8_bytes;
 
 pub const GET_CMD: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 pub struct Get {
-    key: String,
+    #[serde(with = "serde_utf8_bytes")]
+    key: Bytes,
 }
 
 impl Get {
-    pub fn new(key: String) -> Self {
+    pub fn new(key: Bytes) -> Self {
         Self { key }
     }
 
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
-        if let OwnsKeyResponse::False { addr } = db.owns_key(self.key.as_bytes())? {
+        if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
             return Err(Error::InvalidRequest {
                 reason: format!(
                     "Key owned by another node. Redirect request to node {:?}",
@@ -29,11 +31,9 @@ impl Get {
             });
         }
 
-        let value = db.get(self.key.as_bytes()).await?;
+        let value = db.get(&self.key).await?;
         if let Some(value) = value {
-            return Ok(GetResponse {
-                value: String::from_utf8_lossy(&value).into(),
-            });
+            return Ok(GetResponse { value });
         } else {
             return Err(Error::NotFound { key: self.key });
         }
@@ -56,5 +56,6 @@ impl IntoMessage for Get {
 
 #[derive(Serialize, Deserialize)]
 pub struct GetResponse {
-    value: String,
+    #[serde(with = "serde_utf8_bytes")]
+    value: Bytes,
 }

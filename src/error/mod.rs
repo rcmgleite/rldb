@@ -1,17 +1,31 @@
 use std::fmt::Display;
 
+use bytes::Bytes;
 use serde::Serialize;
+
+use crate::utils::serde_utf8_bytes;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Serialize)]
 pub enum Error {
-    NotFound { key: String },
-    InvalidRequest { reason: String },
-    InvalidServerConfig { reason: String },
+    NotFound {
+        #[serde(with = "serde_utf8_bytes")]
+        key: Bytes,
+    },
+    InvalidRequest {
+        reason: String,
+    },
+    InvalidServerConfig {
+        reason: String,
+    },
     Internal(Internal),
-    Io { reason: String },
-    Generic { reason: String },
+    Io {
+        reason: String,
+    },
+    Generic {
+        reason: String,
+    },
 }
 
 impl Display for Error {

@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpStream, ToSocketAddrs},
@@ -30,7 +31,7 @@ impl DbClient {
         Ok(serde_json::from_slice(&response.payload.unwrap())?)
     }
 
-    pub async fn get(&mut self, key: String) -> anyhow::Result<serde_json::Value> {
+    pub async fn get(&mut self, key: Bytes) -> anyhow::Result<serde_json::Value> {
         let get_cmd = cmd::get::Get::new(key);
         let req = Message::from(get_cmd).serialize();
 
@@ -40,7 +41,7 @@ impl DbClient {
         Ok(serde_json::from_slice(&response.payload.unwrap())?)
     }
 
-    pub async fn put(&mut self, key: String, value: String) -> anyhow::Result<serde_json::Value> {
+    pub async fn put(&mut self, key: Bytes, value: Bytes) -> anyhow::Result<serde_json::Value> {
         let put_cmd = cmd::put::Put::new(key, value);
         let req = Message::from(put_cmd).serialize();
 

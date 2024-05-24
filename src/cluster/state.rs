@@ -17,6 +17,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use crate::utils::serde_utf8_bytes;
+
 use super::{
     error::{Error, Result},
     partitioning::PartitioningScheme,
@@ -32,30 +34,11 @@ pub enum NodeStatus {
     Offline,
 }
 
-/// Enable serde to serialize into `Bytes`
-mod utf8_lossy {
-    use bytes::Bytes;
-    use serde::{Deserialize, Serialize};
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(v: &Bytes, s: S) -> Result<S::Ok, S::Error> {
-        let stringified = String::from_utf8(v.clone().into()).map_err(|e| {
-            serde::ser::Error::custom(format!("Unable to convert bytes into utf8 string - {}", e))
-        })?;
-        String::serialize(&stringified, s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
-        let stringified = String::deserialize(d)?;
-        Ok(Bytes::from(stringified))
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     // the IP/PORT pair formatted as <ip>:<port>
     // it's wrapped around Bytes for now to avoid allocating the String multiple times...
-    #[serde(with = "utf8_lossy")]
+    #[serde(with = "serde_utf8_bytes")]
     pub addr: Bytes,
     // Node status, see [`NodeStatus`]
     pub status: NodeStatus,
