@@ -81,7 +81,6 @@ struct StateInner {
     // Which nodes are part of the ring
     nodes: HashMap<Bytes, Node>,
     // Partitioning scheme
-    // TODO: Find a way to inject this instead of hardcoding it..
     partitioning_scheme: Box<dyn PartitioningScheme + Send>,
 }
 
@@ -219,16 +218,23 @@ impl State {
         Ok(guard.nodes.iter().map(|(_, v)| v.clone()).collect())
     }
 
+    /// Returns a random not that is not self
     pub fn get_random_node(&self) -> Result<Node> {
         let guard = self.acquire_lock()?;
         let keys: Vec<&Bytes> = guard.nodes.keys().collect();
         let rnd = if keys.len() == 1 {
-            0
+            return Err(Error::ClusterHasOnlySelf);
         } else {
             rand::thread_rng().gen_range(0..keys.len())
         };
 
         let key = keys[rnd];
+        if *key == self.own_addr {
+            // repick if you got self
+            drop(guard);
+            return self.get_random_node();
+        }
+
         Ok(guard.nodes[key].clone())
     }
 

@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod server;
 pub mod storage_engine;
+pub mod test_utils;
 pub mod utils;
 
 #[cfg(test)]

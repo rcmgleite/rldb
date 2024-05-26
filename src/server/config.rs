@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn deserialize_cluster() {
         let mut standalone_config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        standalone_config_path.push("conf/cluster.json");
+        standalone_config_path.push("conf/cluster_node_1.json");
 
         let standalone_stringified_json = std::fs::read_to_string(standalone_config_path).unwrap();
 

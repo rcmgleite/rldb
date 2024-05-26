@@ -2,6 +2,7 @@ use crate::cluster::error::Result;
 use bytes::Bytes;
 
 pub mod consistent_hashing;
+pub mod mock;
 
 /// This trait defines a PartitioningScheme (ie: how should data be split amongst cluster nodes)
 /// For the 2 mutating operations: `add_node` and `remove_node`, data has to be moved between nodes.

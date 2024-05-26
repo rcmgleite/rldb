@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use rldb::client::DbClient;
+use rldb::client::{db_client::DbClient, Client};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Parser)]
@@ -54,21 +54,24 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Commands::Ping { port } => {
-            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let mut client = DbClient::new(format!("127.0.0.1:{}", port));
+            client.connect().await?;
             let response = client.ping().await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;
         }
         Commands::Get { port, key } => {
-            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let mut client = DbClient::new(format!("127.0.0.1:{}", port));
+            client.connect().await?;
             let response = client.get(key).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;
         }
         Commands::Put { port, key, value } => {
-            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let mut client = DbClient::new(format!("127.0.0.1:{}", port));
+            client.connect().await?;
             let response = client.put(key, value).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
@@ -78,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
             port,
             known_cluster_node,
         } => {
-            let mut client = DbClient::connect(format!("127.0.0.1:{}", port)).await?;
+            let mut client = DbClient::new(format!("127.0.0.1:{}", port));
+            client.connect().await?;
             let response = client.join_cluster(known_cluster_node).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
