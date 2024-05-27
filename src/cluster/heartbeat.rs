@@ -94,7 +94,7 @@ async fn do_heartbeat(
         }
     };
 
-    // let's re-use an exisiting connection to the picked random node if one exists.. otherwise create a new one
+    // let's re-use an exisiting connection if one exists.. otherwise create a new one
     let client = if let Some(client) = cluster_connections.get_mut(&target_node.addr) {
         client
     } else {
@@ -129,6 +129,9 @@ async fn do_heartbeat(
 
         cluster_connections.remove(&target_node.addr);
         if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node) {
+            // TODO: we are swallowing this error and only logging it.
+            // this is a bit odd because we should never actually fail to mark a node as possibly offline (unless there's a logic issue in the code)
+            // Makes me wonder if the API for cluster state should be changed...
             event!(Level::WARN, "Unable to mark node as offline: {}", err);
         }
 
@@ -292,7 +295,7 @@ mod tests {
         match err {
             crate::cluster::error::Error::Client(Error::UnableToConnect { .. }) => {}
             _ => {
-                panic!("Uexpected error: {}", err)
+                panic!("Unexpected error: {}", err)
             }
         }
 
@@ -354,7 +357,7 @@ mod tests {
         match err {
             crate::cluster::error::Error::Client(Error::GenericIo { .. }) => {}
             _ => {
-                panic!("Uexpected error: {}", err)
+                panic!("Unexpected error: {}", err)
             }
         }
 

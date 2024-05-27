@@ -67,7 +67,7 @@ impl PartitioningScheme for ConsistentHashing {
     fn add_node(&mut self, node: Bytes) -> Result<()> {
         let node_hash = (self.hash_fn)(&node);
         match self.hashes.binary_search(&node_hash) {
-            Ok(_) =>return Err(Error::Internal { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() }),
+            Ok(_) => return Err(Error::Internal { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() }),
             Err(index) => {
                 self.hashes.insert(index, node_hash);
                 self.nodes.insert(index, node);
