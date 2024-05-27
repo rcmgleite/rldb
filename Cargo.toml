@@ -8,6 +8,7 @@ readme = "README.md"
 homepage = "https://github.com/rcmgleite/rldb"
 keywords = ["storage-engine", "dynamodb", "distributed-systems", "gossip-protocol", "consistent-hashing"]
 repository = "https://github.com/rcmgleite/rldb"
+documentation = "https://docs.rs/rldb"
 license = "MIT"
 
 [[bin]]
