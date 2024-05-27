@@ -154,15 +154,26 @@ mod tests {
     };
     use bytes::Bytes;
 
+    /// Tests that the heartbeat success flow works as expected.
+    /// The invariants are:
+    ///  1. No errors are returned
+    ///  2. at the end of the execution, there's a single cached connection (in cluster_connections)
+    ///  3. at the end, the cluster state contains 2 nodes(self and remote) both with NodeStatus::Ok and tick == 1
     #[tokio::test]
     async fn success() {
         let own_addr = Bytes::from("fake addr");
-        let state =
-            Arc::new(State::new(Box::new(MockPartitioningScheme::default()), own_addr).unwrap());
+        let state = Arc::new(
+            State::new(
+                Box::new(MockPartitioningScheme::default()),
+                own_addr.clone(),
+            )
+            .unwrap(),
+        );
 
+        let remote_node_addr = Bytes::from("A");
         state
             .merge_nodes(vec![Node {
-                addr: Bytes::from("A"),
+                addr: remote_node_addr.clone(),
                 status: NodeStatus::Ok,
                 tick: 1,
             }])
@@ -171,7 +182,7 @@ mod tests {
         let mut cluster_connections = HashMap::new();
 
         let res = do_heartbeat(
-            state,
+            state.clone(),
             Box::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Never)
@@ -185,18 +196,43 @@ mod tests {
 
         assert_eq!(res, HeartbeatResult::Success);
         assert_eq!(cluster_connections.len(), 1);
+
+        let nodes = state.get_nodes().unwrap();
+        assert_eq!(nodes.len(), 2);
+        for node in nodes {
+            if node.addr == own_addr {
+                assert_eq!(node.status, NodeStatus::Ok);
+                assert_eq!(node.tick, 1);
+            } else if node.addr == remote_node_addr {
+                assert_eq!(node.status, NodeStatus::Ok);
+                assert_eq!(node.tick, 1);
+            } else {
+                panic!("This else clause should never be reached. Either the node is itself or the other node included in the state");
+            }
+        }
     }
 
+    /// Tests that heartbeats to self are skipped.
+    /// The invariants are:
+    ///  1. The response of the heartbeat call is Skipped
+    ///  2. no connections are cached (as none are created)
+    ///  3. the state has a single node (self)
+    ///  4. this single node has a tick of 1 and is marked as Ok
     #[tokio::test]
     async fn skip_heartbeat_to_self() {
         let own_addr = Bytes::from("fake addr");
-        let state =
-            Arc::new(State::new(Box::new(MockPartitioningScheme::default()), own_addr).unwrap());
+        let state = Arc::new(
+            State::new(
+                Box::new(MockPartitioningScheme::default()),
+                own_addr.clone(),
+            )
+            .unwrap(),
+        );
         let mut cluster_connections = HashMap::new();
 
         assert_eq!(
             do_heartbeat(
-                state,
+                state.clone(),
                 Box::new(MockClientFactoryBuilder::new().without_faults().build()),
                 &mut cluster_connections
             )
@@ -206,17 +242,33 @@ mod tests {
         );
 
         assert_eq!(cluster_connections.len(), 0);
+        let nodes = state.get_nodes().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].addr, own_addr);
+        assert_eq!(nodes[0].tick, 1);
+        assert_eq!(nodes[0].status, NodeStatus::Ok);
     }
 
+    /// [`failure_on_connect`] and [`failure_on_heartbeat`] are very similar. the ONLY difference is where the error happens.
+    /// Both have the same invariants though
+    ///  1. An error response must be returned
+    ///  2. At the end of the execution, no connections are cached
+    ///  3. at the end of the execution, the state has the remote node marked as PossiblyOffline with a tick of 2
     #[tokio::test]
     async fn failure_on_connect() {
         let own_addr = Bytes::from("fake addr");
-        let state =
-            Arc::new(State::new(Box::new(MockPartitioningScheme::default()), own_addr).unwrap());
+        let state = Arc::new(
+            State::new(
+                Box::new(MockPartitioningScheme::default()),
+                own_addr.clone(),
+            )
+            .unwrap(),
+        );
 
+        let remote_node_addr = Bytes::from("A");
         state
             .merge_nodes(vec![Node {
-                addr: Bytes::from("A"),
+                addr: remote_node_addr.clone(),
                 status: NodeStatus::Ok,
                 tick: 1,
             }])
@@ -225,7 +277,7 @@ mod tests {
         let mut cluster_connections = HashMap::new();
 
         let err = do_heartbeat(
-            state,
+            state.clone(),
             Box::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Always)
@@ -245,17 +297,39 @@ mod tests {
         }
 
         assert_eq!(cluster_connections.len(), 0);
+        let nodes = state.get_nodes().unwrap();
+        assert_eq!(nodes.len(), 2);
+        for node in nodes {
+            if node.addr == own_addr {
+                // own node must be ok and have a tick equals to 1
+                assert_eq!(node.status, NodeStatus::Ok);
+                assert_eq!(node.tick, 1);
+            } else if node.addr == remote_node_addr {
+                // since connection failed, we should've increased the tick of the node by 1 and set it to PossiblyOffline
+                assert_eq!(node.status, NodeStatus::PossiblyOffline);
+                assert_eq!(node.tick, 2);
+            } else {
+                panic!("This else clause should never be reached. Either the node is itself or the other node included in the state");
+            }
+        }
     }
 
+    /// see [`failure_on_connect`]
     #[tokio::test]
     async fn failure_on_heartbeat() {
         let own_addr = Bytes::from("fake addr");
-        let state =
-            Arc::new(State::new(Box::new(MockPartitioningScheme::default()), own_addr).unwrap());
+        let state = Arc::new(
+            State::new(
+                Box::new(MockPartitioningScheme::default()),
+                own_addr.clone(),
+            )
+            .unwrap(),
+        );
 
+        let remote_node_addr = Bytes::from("A");
         state
             .merge_nodes(vec![Node {
-                addr: Bytes::from("A"),
+                addr: remote_node_addr.clone(),
                 status: NodeStatus::Ok,
                 tick: 1,
             }])
@@ -264,7 +338,7 @@ mod tests {
         let mut cluster_connections = HashMap::new();
 
         let err = do_heartbeat(
-            state,
+            state.clone(),
             Box::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Never)
@@ -285,5 +359,20 @@ mod tests {
         }
 
         assert_eq!(cluster_connections.len(), 0);
+        let nodes = state.get_nodes().unwrap();
+        assert_eq!(nodes.len(), 2);
+        for node in nodes {
+            if node.addr == own_addr {
+                // own node must be ok and have a tick equals to 1
+                assert_eq!(node.status, NodeStatus::Ok);
+                assert_eq!(node.tick, 1);
+            } else if node.addr == remote_node_addr {
+                // since heartbeat failed, we should've increased the tick of the node by 1 and set it to PossiblyOffline
+                assert_eq!(node.status, NodeStatus::PossiblyOffline);
+                assert_eq!(node.tick, 2);
+            } else {
+                panic!("This else clause should never be reached. Either the node is itself or the other node included in the state");
+            }
+        }
     }
 }
