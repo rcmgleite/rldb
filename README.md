@@ -1,4 +1,5 @@
 # rldb
+[![Codecov](https://codecov.io/github/rcmgleite/rldb/coverage.svg?branch=master)](https://codecov.io/gh/rcmgleite/rldb)
 
 ## Intro
 This repo contains an implementation of a dynamo-like key/value database.

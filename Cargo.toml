@@ -2,6 +2,13 @@
 name = "rldb"
 version = "0.1.0"
 edition = "2021"
+description = "A dynamo-like key/value database written in rust"
+authors = ["Rafael Leite"]
+readme = "README.md"
+homepage = "https://github.com/rcmgleite/rldb"
+keywords = ["storage-engine", "dynamodb", "distributed-systems", "gossip-protocol", "consistent-hashing"]
+repository = "https://github.com/rcmgleite/rldb"
+license = "MIT"
 
 [[bin]]
 name = "rldb-server"
