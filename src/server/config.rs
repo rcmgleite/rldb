@@ -1,3 +1,6 @@
+//! Server Configuration attributes
+//!
+//! For examples see the `/conf` directory.
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

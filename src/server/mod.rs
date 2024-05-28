@@ -1,7 +1,9 @@
+//! A TCP based server that receives incoming requests and dispatches [`Command`]
+//!
 //! This file contains 2 things
 //!  1. the TCP listener implementation
 //!    - It accepts tcp connections
-//!    - tries to parse a [`Request`] our of the connection
+//!    - tries to parse a [`Message`] our of the connection
 //!    - tries to construct a [`Command`] out of the parsed Request
 //!    - executes the command
 //!    - writes the response back to the client
@@ -29,16 +31,26 @@ use self::message::Message;
 pub mod config;
 pub mod message;
 
+/// The server struct definition
 pub struct Server {
     /// listener for incoming client requests
     client_listener: TcpListener,
     /// listener for incoming cluster (gossip) requests
     /// Only exists in cluster configuration
     cluster_listener: Option<TcpListener>,
+    /// The underlying [`Db`] used to store data and manage cluster state
     db: Arc<Db>,
 }
 
 impl Server {
+    /// This functions constructs a server based on the provided json configuration
+    /// Once this function returns, all required listeners will already be bound to the requested ports
+    /// and the [`Server`] will be ready to start receiving requests.
+    ///
+    /// # Errors
+    /// This function will return errors in broadly 2 scenarios
+    /// 1. the configuration provided is malformed
+    /// 2. the listener(s) fail to bind to the provided ports
     pub async fn from_config(path: PathBuf) -> Result<Self> {
         let c = tokio::fs::read_to_string(path).await?;
         let config: Config = serde_json::from_str(&c).map_err(|e| Error::InvalidServerConfig {
@@ -106,6 +118,8 @@ impl Server {
         }
     }
 
+    /// This is the main loop of [`Server`]. When this is called, new TCP connections
+    /// will be accepted and requests handled.
     pub async fn run(&mut self) -> Result<()> {
         event!(Level::INFO, "Listener started");
 
@@ -135,6 +149,7 @@ impl Server {
     }
 }
 
+/// Helper function spanwed on a new [`tokio`] task for every newly accepted tcp connection.
 #[instrument(level = "debug")]
 async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
     loop {
@@ -151,6 +166,8 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
     }
 }
 
+/// Function that reads a [`Message`] out of the [TcpStream], construct a [`Command`] and executes it.
+///
 /// There are some oddities here still
 ///  1. parsing a message and a command from a message can return an error
 ///    when that happens, the response will be a message with id `0`. This is odd.

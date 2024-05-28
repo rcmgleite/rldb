@@ -1,3 +1,7 @@
+//! This module contains the definition of a [`Message`] - the smallest unit of parseable bytes built for the rldb [`crate::server::Server`].
+//! When serialized, a [`Message`] looks like the following:
+//!
+//! [4 bytes - ID][4 bytes - length of payload][payload (dynamic size)]
 use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -7,9 +11,9 @@ use crate::error::Result;
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
 /// than 1Mb of memory...
-const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
 
-/// A Request is the unit of the protocol built on top of TCP
+/// The unit of the protocol built on top of TCP
 /// that this server uses.
 #[derive(Debug)]
 pub struct Message {
@@ -19,18 +23,27 @@ pub struct Message {
     pub payload: Option<Bytes>,
 }
 
+/// A trait that has to be implemented for any structs/enums that can be transformed into a [`Message`]
 pub trait IntoMessage {
+    /// Same as [`Message::id`]
     fn id(&self) -> u32;
+    /// Same as [`Message::payload`]
     fn payload(&self) -> Option<Bytes> {
         None
     }
 }
 
 impl Message {
+    /// Constructs a new [`Message`] with the given id and payload
     pub fn new(id: u32, payload: Option<Bytes>) -> Self {
         Self { id, payload }
     }
 
+    /// This function tries to construct a [`Message`] by reading bytes from the provided [`AsyncRead`] source
+    /// # Errors
+    /// This functions returns errors in the following cases
+    ///  1. The message size is bigger than [`MAX_MESSAGE_SIZE`]
+    ///  2. The message is somehow malformed (eg: less bytes were provided than the length received)
     pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Self> {
         let id = reader.read_u32().await?;
         let length = reader.read_u32().await?;
@@ -54,6 +67,7 @@ impl Message {
         Ok(Self { id, payload })
     }
 
+    /// Serializes a [`Message`] struct into it's serialized format (see top level comment for format)
     pub fn serialize(self) -> Bytes {
         let payload = self.payload.clone();
         let payload_len = payload.clone().map_or(0, |payload| payload.len());

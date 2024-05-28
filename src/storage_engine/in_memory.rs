@@ -1,3 +1,7 @@
+//! An in-memory [`StorageEngine`] implementation
+//!
+//! This implementation uses a [`HashMap`] wrapped by a [`Mutex`] and does nothing fency around performance.
+//! It's the most straightforward implementation of a [`StorageEngine`] used for development/testing only
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::{
@@ -7,14 +11,19 @@ use std::{
 
 use super::{Error, Result, StorageEngine};
 
+/// Type alias for the underlying datastructure used to store the key/value pairs
 type Store = HashMap<Bytes, Bytes>;
 
+/// The InMemory [`StorageEngine`] definition
 #[derive(Clone, Debug, Default)]
 pub struct InMemory {
     inner: Arc<Mutex<Store>>,
 }
 
 impl InMemory {
+    /// private function used to acquire a lock over the [`Store`].
+    /// A fail to acquire a lock is considered a [`Error::Logic`] since the only reason why
+    /// an [`Error`] should be returned is in case of [`Mutex`] poisoning
     fn acquire_lock(&self) -> Result<MutexGuard<Store>> {
         match self.inner.lock() {
             Ok(guard) => Ok(guard),
