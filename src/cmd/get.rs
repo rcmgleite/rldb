@@ -1,3 +1,4 @@
+//! Get [`crate::cmd::Command`]
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -17,10 +18,12 @@ pub struct Get {
 }
 
 impl Get {
+    /// Constructs a new [`Get`] instance
     pub fn new(key: Bytes) -> Self {
         Self { key }
     }
 
+    /// Executes the [`Get`] command using the specified [`Db`] instance
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
         if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
             return Err(Error::InvalidRequest {
@@ -39,6 +42,7 @@ impl Get {
         }
     }
 
+    /// returns the cmd id for [`Get`]
     pub fn cmd_id() -> u32 {
         GET_CMD
     }
@@ -54,6 +58,7 @@ impl IntoMessage for Get {
     }
 }
 
+/// The struct that represents a [`Get`] response payload
 #[derive(Serialize, Deserialize)]
 pub struct GetResponse {
     #[serde(with = "serde_utf8_bytes")]

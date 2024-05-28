@@ -1,3 +1,5 @@
+//! This module defines client/user visible errors that can be returned by rldb.
+
 use std::fmt::Display;
 
 use bytes::Bytes;
@@ -7,6 +9,7 @@ use crate::utils::serde_utf8_bytes;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Error enum with all possible variants
 #[derive(Debug, Serialize)]
 pub enum Error {
     NotFound {

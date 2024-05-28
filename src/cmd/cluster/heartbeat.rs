@@ -1,3 +1,11 @@
+//! Heartbeat [`crate::cmd::Command`]
+//!
+//! This command is issued as part of the Gossip protocol that propagates
+//! cluster states to all cluster nodes.
+//! Every heartbeat request marshalls the node's own view of the cluster and sends it to X other nodes.
+//! The receiving end of the command will merge its view of the cluster with received view and consolidate it
+//! by checking each individual [`crate::cluster::state::Node::tick`] field and always favoring the highest one.
+//! See [`crate::cluster::state`] docs for more information.
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -13,14 +21,17 @@ pub struct Heartbeat {
 }
 
 impl Heartbeat {
+    /// Constructs a new heartbeat [`crate::cmd::Command`]
     pub fn new(nodes: Vec<Node>) -> Self {
         Self { nodes }
     }
 
-    // Heartbeat flow
-    // 1. receive a heartbeat (possibly from a node that it doesn't know yet)
-    // 2. update it's view of the ring state including the possibly new node
-    // 3. responde to the heartbeat with an ACK response
+    /// Executes a [`Heartbeat`] command
+
+    /// Heartbeat flow
+    /// 1. receive a heartbeat (possibly from a node that it doesn't know yet)
+    /// 2. update it's view of the ring state including the possibly new node
+    /// 3. responde to the heartbeat with an ACK response
     pub async fn execute(self, db: Arc<Db>) -> Result<HeartbeatResponse> {
         db.update_cluster_state(self.nodes)?;
 
@@ -44,6 +55,7 @@ impl IntoMessage for Heartbeat {
     }
 }
 
+/// [Heartbeat] deserialized response payload
 #[derive(Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     message: String,

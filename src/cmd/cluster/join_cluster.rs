@@ -1,3 +1,8 @@
+//! [`JoinCluster`] [`crate::cmd::Command`]
+//!
+//! Every newly bootstrapped node that needs to join a cluster must receive this [`crate::server::message::Message`].
+//! it will receive one existing node cluster so that it can establish a TCP connection to it and start receiving
+//! cluster information from it.
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -7,6 +12,7 @@ use crate::{cluster::state::Node, db::Db, error::Result, server::message::IntoMe
 
 pub const CMD_CLUSTER_JOIN_CLUSTER: u32 = 101;
 
+/// JoinCluster deserialized [`crate::cmd::Command`]
 #[derive(Serialize, Deserialize)]
 pub struct JoinCluster {
     known_cluster_node_addr: String,
@@ -19,9 +25,11 @@ impl JoinCluster {
         }
     }
 
-    // This cmd simply adds the provided target node to the cluster state.
-    // the background heartbeat process will take care of receiving ring state info
-    // from this node (eventually)
+    /// Executes a [`JoinCluster`] command.
+    ///
+    /// This command simply adds the provided target node to the cluster state.
+    /// the background heartbeat process will take care of receiving ring state info
+    /// from this node (eventually). See [`crate::cluster::heartbeat`] docs for more information.
     pub async fn execute(self, db: Arc<Db>) -> Result<JoinClusterResponse> {
         let target_node = Node::new(Bytes::from(self.known_cluster_node_addr));
 
@@ -47,6 +55,7 @@ impl IntoMessage for JoinCluster {
     }
 }
 
+/// Deserialized [`JoinCluster`] response payload.
 #[derive(Serialize, Deserialize)]
 pub struct JoinClusterResponse {
     message: String,

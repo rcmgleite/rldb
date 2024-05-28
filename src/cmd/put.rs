@@ -1,3 +1,4 @@
+//! Put [`crate::cmd::Command`]
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -10,6 +11,7 @@ use crate::utils::serde_utf8_bytes;
 
 pub const PUT_CMD: u32 = 3;
 
+/// Struct that represents a deserialized Put payload
 #[derive(Serialize, Deserialize)]
 pub struct Put {
     #[serde(with = "serde_utf8_bytes")]
@@ -19,10 +21,12 @@ pub struct Put {
 }
 
 impl Put {
+    /// Constructs a new [`Put`] [`crate::cmd::Command`]
     pub fn new(key: Bytes, value: Bytes) -> Self {
         Self { key, value }
     }
 
+    /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
         if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
             return Err(Error::InvalidRequest {
@@ -54,6 +58,7 @@ impl IntoMessage for Put {
     }
 }
 
+/// [`Put`] response payload in its deserialized form.
 #[derive(Serialize, Deserialize)]
 pub struct PutResponse {
     message: String,

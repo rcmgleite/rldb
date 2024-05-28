@@ -1,3 +1,4 @@
+//! Ping [`crate::cmd::Command`]
 use serde::{Deserialize, Serialize};
 
 use crate::{error::Result, server::message::IntoMessage};
@@ -21,6 +22,7 @@ impl IntoMessage for Ping {
     }
 }
 
+/// [`Ping`] response payload
 #[derive(Serialize, Deserialize)]
 pub struct PingResponse {
     message: String,

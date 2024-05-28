@@ -1,4 +1,5 @@
 //! This module contains the definition of a [`Message`] - the smallest unit of parseable bytes built for the rldb [`crate::server::Server`].
+//!
 //! When serialized, a [`Message`] looks like the following:
 //!
 //! [4 bytes - ID][4 bytes - length of payload][payload (dynamic size)]

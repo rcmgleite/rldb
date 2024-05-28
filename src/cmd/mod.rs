@@ -1,3 +1,4 @@
+//! Module that contains all commands implemented by rldb.
 pub mod cluster;
 pub mod get;
 pub mod ping;
@@ -24,8 +25,10 @@ use crate::{
     server::message::Message,
 };
 
-// TODO: Note - we are mixing cluster and client commands here... it might be better to split them in the future.
-// right now a cluster command issued against the client port will run normally which is a bit weird...
+/// Command definition - this enum contains all commands implemented by rldb.
+///
+/// TODO: Note - we are mixing cluster and client commands here... it might be better to split them in the future.
+/// right now a cluster command issued against the client port will run normally which is a bit weird...
 pub enum Command {
     Ping(PingCommand),
     Get(GetCommand),
@@ -34,6 +37,7 @@ pub enum Command {
     JoinCluster(JoinClusterCommand),
 }
 
+/// macro that tries to construct a specific [`Command`] from a [`Message`]
 macro_rules! try_from_message_with_payload {
     ($message:expr, $t:ident) => {{
         (|| {
@@ -63,6 +67,7 @@ macro_rules! try_from_message_with_payload {
 }
 
 impl Command {
+    /// Executes a given command by forwarding the [`Db`] instance provided
     pub async fn execute(self, db: Arc<Db>) -> Message {
         match self {
             Command::Ping(cmd) => {
@@ -94,6 +99,10 @@ impl Command {
         }
     }
 
+    /// Tries to construct a [`Command`] from the provided [`Message`]
+    ///
+    /// # Errors
+    /// returns an error if the payload doesn't conform with the specified [`Command`]
     pub fn try_from_message(message: Message) -> Result<Command> {
         match message.id {
             PING_CMD => Ok(Command::Ping(ping::Ping)),
@@ -120,6 +129,7 @@ impl Command {
         }
     }
 
+    /// Serializes the given payload into json
     pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
