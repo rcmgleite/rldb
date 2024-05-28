@@ -1,5 +1,6 @@
-//! This file contains the logic related to the gossip protocol
-//! used between rldb-server nodes in cluster mode. This is a TCP based protocol
+//! This file contains the logic related to the gossip protocol used between rldb-server nodes in cluster mode.
+//!
+//! This is a TCP based protocol
 //! that will be used to:
 //!   1. Node discovery
 //!     Every node that joins a running rldb cluster will learn about the other nodes via this protocol
@@ -9,7 +10,7 @@
 //!   2. Evaluate nodes health
 //!     This happens by each node randomly choosing X nodes to ping every Y seconds (configurable).
 //!     Hosts that are unreachable or respond with anything other than success are marked as
-//!     [`NodeStatus::PossiblyOffline`]
+//!     [`crate::cluster::state::NodeStatus::PossiblyOffline`]
 //!     Note: Node are never automatically removed from the cluster. This requires an operator to manually intervene.
 //!     The reason for that is that reshuffling partitions can be quite expensive (even when using schemes like consistent hashing).
 //!     So we deliberately chose to let an operator make that decision instead of having automatic detection.
@@ -28,18 +29,20 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
 
+/// Struct that represents the deserialized payload used on [`crate::cmd::Command::Heartbeat`] command
 #[derive(Serialize, Deserialize)]
 pub struct RingStateMessagePayload {
+    /// Nodes that are part of the cluster state
     nodes: Vec<Node>,
 }
 
-/// Start heartbeat will
+/// function responsible for the heartbeat process that enables rldb cluster nodes to propagete cluster state changes / failures.
+///
+/// This operations does the following:
 /// 1. create a tcp connection with the required target_addr (If one doesn't exist yet)
 /// 2. send a heartbeat message to the target node (which includes the current node view of the ring)
 /// 3. Receive a heartbeat response (ACK OR FAILURE)
 /// 4. loop forever picking a random node of the ring every X seconds and performing steps 2 through 3 again
-///
-/// TODO: This is gonna be a tough one to write good tests for
 pub async fn start_heartbeat(cluster_state: Arc<State>) {
     let mut cluster_connections = HashMap::new();
 
@@ -71,7 +74,6 @@ enum HeartbeatResult {
     Success,
 }
 
-// TODO: Inject config on how many nodes to heartbeat to
 async fn do_heartbeat(
     cluster_state: Arc<State>,
     client_factory: Box<dyn ClientFactory + Send>,

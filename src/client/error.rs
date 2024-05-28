@@ -1,13 +1,20 @@
 use serde::Serialize;
 
+/// Concrete type for a [`crate::client::Client`]` error
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Enum that represents a [`crate::client::Client`] error
 #[derive(Debug, Serialize)]
 pub enum Error {
+    /// Logic is a bug -> if this happens we have to fix something
     Logic { reason: String },
+    /// Variant returned when a client was unable to establish a tcp connection with an rldb node
     UnableToConnect { reason: String },
+    /// Generic IO error (automatically converted from [`std::io::Error`])
     GenericIo { reason: String },
+    /// Variant returned if the client was unable to interpret the server response
     InvalidServerResponse { reason: String },
+    /// truly generic error -> might be dropped soon
     Generic { reason: String },
 }
 

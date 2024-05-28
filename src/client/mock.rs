@@ -1,3 +1,6 @@
+//! Mock implementation for [`Client`]
+//!
+//! Still WIP... might be completely removed in favor of a package like mockall
 use crate::{
     cluster::state::Node,
     test_utils::fault::{Fault, When},

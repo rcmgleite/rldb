@@ -1,3 +1,4 @@
+//! The mock module contains a mock [`PartitioningScheme`] used for tests
 use bytes::Bytes;
 use std::collections::HashSet;
 

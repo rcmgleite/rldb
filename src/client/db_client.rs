@@ -1,3 +1,4 @@
+//! A concrete [`Client`] implementation for rldb
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
@@ -10,10 +11,13 @@ use crate::server::message::Message;
 use super::error::{Error, Result};
 use super::{Client, Factory};
 
+/// DbClient handle
 pub struct DbClient {
+    /// state stores the [`DbClientState`] of this implementation
     state: DbClientState,
 }
 
+/// A [`DbClient`] can either be Connected or Disconnected
 enum DbClientState {
     Disconnected { addr: String },
     Connected { connection: TcpStream },

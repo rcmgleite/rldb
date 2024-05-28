@@ -1,3 +1,4 @@
+//! Consistent-hashing is the default [`PartitioningScheme`] for rldb
 use crate::cluster::error::{Error, Result};
 use bytes::Bytes;
 use murmur3::murmur3_x86_128;
@@ -17,7 +18,7 @@ type HashFunctionReturnType = u128;
 /// Note that this hash space should be viewed as a circular buffer (or hash ring). Let's
 /// try to understand the hash ring statement through an example:
 ///
-/// In this example, hash space that goes from [0,10] (ie: the hash function returns a number between 0 and 10).
+/// In this example we have a hash space that goes from 0 to 10 (ie: the hash function returns a number between 0 and 10).
 /// Nodes:     ['A', 'B', 'C']
 /// Nodes_hash:[ 2 ,  5 ,  8 ]
 ///
