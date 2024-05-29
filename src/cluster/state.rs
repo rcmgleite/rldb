@@ -86,11 +86,9 @@ struct StateInner {
 
 impl std::fmt::Debug for StateInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (_, v) in self.nodes.iter() {
-            write!(f, "\n{:?}", v)?;
-        }
-
-        Ok(())
+        f.debug_struct("StateInner")
+            .field("nodes", &self.nodes)
+            .finish()
     }
 }
 
@@ -244,6 +242,11 @@ impl State {
 
     pub fn owns_key(&self, key: &[u8]) -> Result<bool> {
         Ok(self.own_addr == self.key_owner(key)?.addr)
+    }
+
+    pub fn preference_list(&self, key: &[u8], list_size: usize) -> Result<Vec<Bytes>> {
+        let guard = self.acquire_lock()?;
+        guard.partitioning_scheme.preference_list(key, list_size)
     }
 }
 

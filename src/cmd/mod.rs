@@ -130,7 +130,7 @@ impl Command {
     }
 
     /// Serializes the given payload into json
-    pub(crate) fn serialize_response_payload<T: Serialize>(payload: T) -> Option<Bytes> {
+    pub(crate) fn serialize_response_payload<T: Serialize>(payload: Result<T>) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
 }

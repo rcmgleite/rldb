@@ -2,8 +2,13 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::{event, Level};
 
+use crate::client::db_client::DbClient;
+use crate::client::Client;
 use crate::db::{Db, OwnsKeyResponse};
 use crate::error::{Error, Result};
 use crate::server::message::IntoMessage;
@@ -18,29 +23,130 @@ pub struct Put {
     key: Bytes,
     #[serde(with = "serde_utf8_bytes")]
     value: Bytes,
+    replication: bool,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
     pub fn new(key: Bytes, value: Bytes) -> Self {
-        Self { key, value }
+        Self {
+            key,
+            value,
+            replication: false,
+        }
+    }
+
+    /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
+    pub fn new_replication(key: Bytes, value: Bytes) -> Self {
+        Self {
+            key,
+            value,
+            replication: true,
+        }
     }
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
-        if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
-            return Err(Error::InvalidRequest {
-                reason: format!(
-                    "Key owned by another node. Redirect request to node {:?}",
-                    addr
-                ),
-            });
+        if self.replication {
+            event!(Level::DEBUG, "Executing a replication Put");
+            // if this is a replication PUT, we don't have to deal with quorum
+            db.put(self.key.into(), self.value.into()).await?;
+        } else {
+            event!(Level::DEBUG, "Executing a coordinator Put");
+            // if this is not a replication PUT, we have to honor quorum before returning a success
+            if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
+                return Err(Error::InvalidRequest {
+                    reason: format!(
+                        "Key owned by another node. Redirect request to node {:?}",
+                        addr
+                    ),
+                });
+            }
+
+            // if we have a quorum config, we have to make sure we wrote to enough replicas
+            if let Some(quorum) = db.quorum_config() {
+                let mut successful_writes = 0;
+                let mut futures = FuturesUnordered::new();
+
+                // the preference list will contain the node itself (otherwise there's a bug).
+                // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
+                let preference_list = db.preference_list(&self.key)?;
+                for node in preference_list {
+                    futures.push(Self::do_put(
+                        self.key.clone(),
+                        self.value.clone(),
+                        db.clone(),
+                        node,
+                    ))
+                }
+
+                // for now, let's wait til all futures either succeed or fail.
+                // we don't strictly need that since we are quorum based..
+                // doing it this way now for simplicity but this will have a latency impact
+                while let Some(res) = futures.next().await {
+                    if res.is_ok() {
+                        successful_writes += 1;
+                    }
+                }
+
+                if successful_writes < quorum.writes {
+                    return Err(Error::QuorumNotReached {
+                        required: quorum.writes,
+                        got: successful_writes,
+                    });
+                }
+            } else {
+                db.put(self.key.into(), self.value.into()).await?;
+            }
         }
 
-        db.put(self.key.into(), self.value.into()).await?;
         Ok(PutResponse {
             message: "Ok".to_string(),
         })
+    }
+
+    /// Wrapper function that allows the same inteface to put locally (using [`Db`]) or remotely (using [`DbClient`])
+    async fn do_put(key: Bytes, value: Bytes, db: Arc<Db>, dst_addr: Bytes) -> Result<()> {
+        if let OwnsKeyResponse::True = db.owns_key(&dst_addr)? {
+            event!(Level::DEBUG, "Storing key : {:?} locally", key);
+            db.put(key, value).await?;
+        } else {
+            event!(
+                Level::DEBUG,
+                "will store key : {:?} in node: {:?}",
+                key,
+                dst_addr
+            );
+            let mut client =
+                DbClient::new(String::from_utf8(dst_addr.clone().into()).map_err(|e| {
+                    event!(
+                        Level::ERROR,
+                        "Unable to parse addr as utf8 {}",
+                        e.to_string()
+                    );
+                    Error::Internal(crate::error::Internal::Unknown)
+                })?);
+
+            event!(Level::DEBUG, "connecting to node node: {:?}", dst_addr);
+            client.connect().await.map_err(|e| {
+                event!(
+                    Level::ERROR,
+                    "Unable to connect to node while executing PUT {}",
+                    e.to_string()
+                );
+                Error::Internal(crate::error::Internal::Unknown)
+            })?;
+
+            let resp = client.put(key.clone(), value, true).await.map_err(|e| {
+                event!(Level::ERROR, "failed to PUT {}", e.to_string());
+                Error::Internal(crate::error::Internal::Unknown)
+            })?;
+
+            event!(Level::INFO, "{:?}", resp);
+            event!(Level::DEBUG, "stored key : {:?} locally", key);
+        }
+
+        Ok(())
     }
 
     pub fn cmd_id() -> u32 {
@@ -59,7 +165,7 @@ impl IntoMessage for Put {
 }
 
 /// [`Put`] response payload in its deserialized form.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PutResponse {
-    message: String,
+    pub message: String,
 }

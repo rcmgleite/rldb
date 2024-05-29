@@ -2,7 +2,7 @@
 use crate::cluster::error::{Error, Result};
 use bytes::Bytes;
 use murmur3::murmur3_x86_128;
-use std::io::Cursor;
+use std::{collections::HashSet, io::Cursor};
 
 use super::PartitioningScheme;
 
@@ -88,6 +88,32 @@ impl PartitioningScheme for ConsistentHashing {
     }
 
     fn key_owner(&self, key: &[u8]) -> Result<Bytes> {
+        let index = self.key_owner_index(key)?;
+        Ok(self.nodes[index].clone())
+    }
+
+    fn preference_list(&self, key: &[u8], list_size: usize) -> Result<Vec<Bytes>> {
+        let owner_index = self.key_owner_index(key)?;
+        let mut res = Vec::with_capacity(list_size);
+
+        let mut visited_indexes = HashSet::new();
+        for i in 0..list_size {
+            let index = (owner_index + i) % self.nodes.len();
+            if visited_indexes.contains(&index) {
+                continue;
+            } else {
+                visited_indexes.insert(index);
+            }
+
+            res.push(self.nodes[index].clone());
+        }
+
+        Ok(res)
+    }
+}
+
+impl ConsistentHashing {
+    fn key_owner_index(&self, key: &[u8]) -> Result<usize> {
         if self.nodes.is_empty() {
             return Err(Error::Logic {
                 reason: "Can't ask for owner if no nodes are present".to_string(),
@@ -95,9 +121,7 @@ impl PartitioningScheme for ConsistentHashing {
         }
 
         let key_hash = (self.hash_fn)(key);
-        let index = self.hashes.partition_point(|elem| *elem < key_hash) % self.nodes.len();
-
-        Ok(self.nodes[index].clone())
+        Ok(self.hashes.partition_point(|elem| *elem < key_hash) % self.nodes.len())
     }
 }
 

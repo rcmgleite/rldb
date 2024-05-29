@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use crate::{
     cluster::state::{Node, State},
-    error::Result,
+    error::{Error, Result},
+    server::config::Quorum,
 };
 
 /// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
@@ -23,6 +24,9 @@ pub struct Db {
     /// Cluster state.
     /// This will be present if this is configured as a cluster node
     cluster_state: Option<Arc<State>>,
+    /// Quorum configuration
+    /// TODO: Should this really be here?
+    quorum: Option<Quorum>,
 }
 
 /// Possibly a bad idea, but using an enum instead of a boolean to determine if a key is owned by a node or not.
@@ -37,10 +41,15 @@ pub enum OwnsKeyResponse {
 
 impl Db {
     /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`State`].
-    pub fn new(storage_engine: StorageEngine, cluster_state: Option<Arc<State>>) -> Self {
+    pub fn new(
+        storage_engine: StorageEngine,
+        cluster_state: Option<Arc<State>>,
+        quorum: Option<Quorum>,
+    ) -> Self {
         Self {
             storage_engine,
             cluster_state,
+            quorum,
         }
     }
 
@@ -82,6 +91,24 @@ impl Db {
             Ok(cluster_state.merge_nodes(nodes)?)
         } else {
             Ok(())
+        }
+    }
+
+    /// returns the quorum config
+    pub fn quorum_config(&self) -> Option<Quorum> {
+        self.quorum.clone()
+    }
+
+    pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            // TODO: quorum config must be tied to cluster state otherwise the API is really weird
+            Ok(cluster_state.preference_list(key, self.quorum.as_ref().unwrap().replicas)?)
+        } else {
+            // TODO: There must be a way to make sure a caller is not allowed to call methods that only make sense
+            // in cluster mode instead of a runtime failure.
+            Err(Error::Generic {
+                reason: "preference_list is meaningless for rldb not in cluster mode".to_string(),
+            })
         }
     }
 }

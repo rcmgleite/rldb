@@ -7,7 +7,7 @@
         },
         "quorum": {
             "n": 3,
-            "r": 1,
+            "r": 2,
             "w": 2
         },
         "partitioning_scheme": "consistent_hashing"

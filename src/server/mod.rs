@@ -71,7 +71,7 @@ impl Server {
                 Ok(Self {
                     client_listener: listener,
                     cluster_listener: None,
-                    db: Arc::new(Db::new(storage_engine, None)),
+                    db: Arc::new(Db::new(storage_engine, None, None)),
                 })
             }
 
@@ -80,8 +80,7 @@ impl Server {
                 storage_engine,
                 partitioning_scheme,
                 gossip,
-                // TODO: wire quorum configs once this feature is implemented
-                quorum: _,
+                quorum,
             }) => {
                 let client_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
 
@@ -112,7 +111,11 @@ impl Server {
                 Ok(Self {
                     client_listener,
                     cluster_listener: Some(cluster_listener),
-                    db: Arc::new(Db::new(storage_engine, Some(partitioning_scheme))),
+                    db: Arc::new(Db::new(
+                        storage_engine,
+                        Some(partitioning_scheme),
+                        Some(quorum),
+                    )),
                 })
             }
         }

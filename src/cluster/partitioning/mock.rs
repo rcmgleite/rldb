@@ -31,4 +31,12 @@ impl PartitioningScheme for MockPartitioningScheme {
             reason: "mock".to_string(),
         });
     }
+
+    fn preference_list(
+        &self,
+        _key: &[u8],
+        _list_size: usize,
+    ) -> crate::cluster::error::Result<Vec<Bytes>> {
+        todo!()
+    }
 }

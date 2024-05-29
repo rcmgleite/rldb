@@ -29,6 +29,10 @@ pub enum Error {
     Generic {
         reason: String,
     },
+    QuorumNotReached {
+        required: usize,
+        got: usize,
+    },
 }
 
 impl Display for Error {

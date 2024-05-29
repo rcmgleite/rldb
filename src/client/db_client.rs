@@ -3,9 +3,15 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tracing::{event, Level};
 
 use crate::cluster::state::Node;
 use crate::cmd;
+use crate::cmd::cluster::heartbeat::HeartbeatResponse;
+use crate::cmd::cluster::join_cluster::JoinClusterResponse;
+use crate::cmd::get::GetResponse;
+use crate::cmd::ping::PingResponse;
+use crate::cmd::put::PutResponse;
 use crate::server::message::Message;
 
 use super::error::{Error, Result};
@@ -59,7 +65,7 @@ impl Client for DbClient {
         Ok(())
     }
 
-    async fn ping(&mut self) -> Result<serde_json::Value> {
+    async fn ping(&mut self) -> Result<PingResponse> {
         let ping_cmd = cmd::ping::Ping;
         let req = Message::from(ping_cmd).serialize();
 
@@ -67,32 +73,54 @@ impl Client for DbClient {
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+        event!(Level::DEBUG, "{:?}", response.payload.as_ref().unwrap());
+        serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn get(&mut self, key: Bytes) -> Result<serde_json::Value> {
-        let get_cmd = cmd::get::Get::new(key);
+    async fn get(&mut self, key: Bytes, replica: bool) -> Result<GetResponse> {
+        let get_cmd = if replica {
+            cmd::get::Get::new_replica(key)
+        } else {
+            cmd::get::Get::new(key)
+        };
+
         let req = Message::from(get_cmd).serialize();
 
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+        serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn put(&mut self, key: Bytes, value: Bytes) -> Result<serde_json::Value> {
-        let put_cmd = cmd::put::Put::new(key, value);
+    async fn put(&mut self, key: Bytes, value: Bytes, replication: bool) -> Result<PutResponse> {
+        let put_cmd = if replication {
+            cmd::put::Put::new_replication(key, value)
+        } else {
+            cmd::put::Put::new(key, value)
+        };
         let req = Message::from(put_cmd).serialize();
 
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+        if response.id != cmd::put::Put::cmd_id() {
+            return Err(Error::InvalidServerResponse {
+                reason: "response id does not match request".to_string(),
+            });
+        }
+
+        event!(
+            Level::DEBUG,
+            "put response: {:?}",
+            response.payload.as_ref().unwrap()
+        );
+
+        serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> Result<serde_json::Value> {
+    async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> Result<HeartbeatResponse> {
         let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
         let req = Message::from(cmd).serialize();
 
@@ -100,10 +128,13 @@ impl Client for DbClient {
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+        serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn join_cluster(&mut self, known_cluster_node_addr: String) -> Result<serde_json::Value> {
+    async fn join_cluster(
+        &mut self,
+        known_cluster_node_addr: String,
+    ) -> Result<JoinClusterResponse> {
         let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
         let req = Message::from(cmd).serialize();
 
@@ -111,7 +142,7 @@ impl Client for DbClient {
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        Ok(serde_json::from_slice(&response.payload.unwrap())?)
+        serde_json::from_slice(&response.payload.unwrap())?
     }
 }
 
