@@ -175,5 +175,5 @@ impl IntoMessage for Get {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetResponse {
     #[serde(with = "serde_utf8_bytes")]
-    value: Bytes,
+    pub value: Bytes,
 }

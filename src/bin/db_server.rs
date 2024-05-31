@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     let mut server = Server::from_config(args.config_path).await?;
-    server.run().await?;
+    server.run(tokio::signal::ctrl_c()).await?;
 
     Ok(())
 }

@@ -1,3 +1,5 @@
+use crate::utils::serde_utf8_bytes;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 /// Concrete type for a [`crate::client::Client`]` error
@@ -14,6 +16,11 @@ pub enum Error {
     InvalidServerResponse { reason: String },
     /// Variant returned when either PUT or GET quorums are not met
     QuorumNotReached { required: usize, got: usize },
+    /// Error for GET requests when the key doesn't exist
+    NotFound {
+        #[serde(with = "serde_utf8_bytes")]
+        key: Bytes,
+    },
     /// Generic IO error (automatically converted from [`std::io::Error`])
     Io { reason: String },
     /// Generic error - let's drop this ASAP
