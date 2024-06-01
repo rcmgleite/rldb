@@ -60,39 +60,48 @@ impl Get {
                 // TODO: we are waiting for all nodes on the preference list to return either error or success
                 // this will cause latency issues and it's no necessary.. fix it later
                 let mut results = Vec::new();
+                let mut errors = Vec::new();
                 while let Some(res) = futures.next().await {
-                    if let Ok(res) = res {
-                        results.push(res);
-                    } else {
-                        event!(
-                            Level::WARN,
-                            "Got a failed GET from a remote host: {:?}",
-                            res
-                        );
+                    match res {
+                        Ok(res) => {
+                            results.push(res);
+                        }
+                        Err(err) => {
+                            event!(
+                                Level::WARN,
+                                "Got a failed GET from a remote host: {:?}",
+                                err
+                            );
+
+                            errors.push(err);
+                        }
                     }
                 }
 
                 event!(Level::INFO, "raw results: {:?}", results);
                 // TODO: very cumbersome logic... will have to make this better later
                 let mut successes = 0;
-                if results.len() >= quorum_config.reads {
-                    let mut result_freq: HashMap<Bytes, usize> = HashMap::new();
-                    for result in results {
-                        *result_freq.entry(result).or_default() += 1;
+                let mut result_freq: HashMap<Bytes, usize> = HashMap::new();
+                for result in results {
+                    *result_freq.entry(result).or_default() += 1;
+                }
+
+                event!(Level::WARN, "result_freq: {:?}", result_freq);
+
+                for (res, freq) in result_freq {
+                    if freq >= quorum_config.reads {
+                        return Ok(GetResponse { value: res });
                     }
 
-                    event!(Level::WARN, "result_freq: {:?}", result_freq);
+                    successes = freq;
+                }
 
-                    for (res, freq) in result_freq {
-                        if freq >= quorum_config.reads {
-                            return Ok(GetResponse { value: res });
-                        }
-
-                        successes = freq;
-                    }
+                if errors.iter().all(|err| err.is_not_found()) {
+                    return Err(Error::NotFound { key: self.key });
                 }
 
                 return Err(Error::QuorumNotReached {
+                    operation: "Get".to_string(),
                     required: quorum_config.reads,
                     got: successes,
                 });
@@ -133,24 +142,15 @@ impl Get {
                         "Unable to parse addr as utf8 {}",
                         e.to_string()
                     );
-                    Error::Internal(crate::error::Internal::Unknown)
+                    Error::Internal(crate::error::Internal::Unknown {
+                        reason: e.to_string(),
+                    })
                 })?);
 
             event!(Level::INFO, "connecting to node node: {:?}", src_addr);
-            client.connect().await.map_err(|e| {
-                event!(
-                    Level::ERROR,
-                    "Unable to connect to node while executing GET {}",
-                    e.to_string()
-                );
-                Error::Internal(crate::error::Internal::Unknown)
-            })?;
+            client.connect().await?;
 
-            let resp = client.get(key.clone(), true).await.map_err(|e| {
-                event!(Level::ERROR, "failed to GET {}", e.to_string());
-                Error::Internal(crate::error::Internal::Unknown)
-            })?;
-
+            let resp = client.get(key.clone(), true).await?;
             Ok(resp.value)
         }
     }

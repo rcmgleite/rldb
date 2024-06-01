@@ -4,7 +4,10 @@
 use crate::{
     cluster::state::Node,
     cmd::{
-        cluster::{heartbeat::HeartbeatResponse, join_cluster::JoinClusterResponse},
+        cluster::{
+            cluster_state::ClusterStateResponse, heartbeat::HeartbeatResponse,
+            join_cluster::JoinClusterResponse,
+        },
         get::GetResponse,
         ping::PingResponse,
         put::PutResponse,
@@ -95,6 +98,10 @@ impl Client for MockClient {
         &mut self,
         _known_cluster_node_addr: String,
     ) -> Result<JoinClusterResponse> {
+        todo!()
+    }
+
+    async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
         todo!()
     }
 }

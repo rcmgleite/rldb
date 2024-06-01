@@ -111,6 +111,14 @@ impl Db {
             })
         }
     }
+
+    pub fn cluster_state(&self) -> Result<Vec<Node>> {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            Ok(cluster_state.get_nodes()?)
+        } else {
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[cfg(test)]

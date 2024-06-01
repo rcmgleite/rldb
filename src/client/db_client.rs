@@ -7,6 +7,7 @@ use tracing::{event, Level};
 
 use crate::cluster::state::Node;
 use crate::cmd;
+use crate::cmd::cluster::cluster_state::ClusterStateResponse;
 use crate::cmd::cluster::heartbeat::HeartbeatResponse;
 use crate::cmd::cluster::join_cluster::JoinClusterResponse;
 use crate::cmd::get::GetResponse;
@@ -136,6 +137,17 @@ impl Client for DbClient {
         known_cluster_node_addr: String,
     ) -> Result<JoinClusterResponse> {
         let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
+        let req = Message::from(cmd).serialize();
+
+        let conn = self.get_conn_mut()?;
+        conn.write_all(&req).await?;
+
+        let response = Message::try_from_async_read(conn).await?;
+        serde_json::from_slice(&response.payload.unwrap())?
+    }
+
+    async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
+        let cmd = cmd::cluster::cluster_state::ClusterState::new();
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;

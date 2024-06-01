@@ -84,13 +84,19 @@ impl Put {
                 // we don't strictly need that since we are quorum based..
                 // doing it this way now for simplicity but this will have a latency impact
                 while let Some(res) = futures.next().await {
-                    if res.is_ok() {
-                        successful_writes += 1;
+                    match res {
+                        Ok(_) => {
+                            successful_writes += 1;
+                        }
+                        Err(err) => {
+                            event!(Level::WARN, "Failed a PUT: {:?}", err);
+                        }
                     }
                 }
 
                 if successful_writes < quorum.writes {
                     return Err(Error::QuorumNotReached {
+                        operation: "Put".to_string(),
                         required: quorum.writes,
                         got: successful_writes,
                     });
@@ -124,25 +130,17 @@ impl Put {
                         "Unable to parse addr as utf8 {}",
                         e.to_string()
                     );
-                    Error::Internal(crate::error::Internal::Unknown)
+                    Error::Internal(crate::error::Internal::Unknown {
+                        reason: e.to_string(),
+                    })
                 })?);
 
             event!(Level::DEBUG, "connecting to node node: {:?}", dst_addr);
-            client.connect().await.map_err(|e| {
-                event!(
-                    Level::ERROR,
-                    "Unable to connect to node while executing PUT {}",
-                    e.to_string()
-                );
-                Error::Internal(crate::error::Internal::Unknown)
-            })?;
+            client.connect().await?;
 
-            let resp = client.put(key.clone(), value, true).await.map_err(|e| {
-                event!(Level::ERROR, "failed to PUT {}", e.to_string());
-                Error::Internal(crate::error::Internal::Unknown)
-            })?;
+            // TODO: assert the response
+            let _ = client.put(key.clone(), value, true).await?;
 
-            event!(Level::INFO, "{:?}", resp);
             event!(Level::DEBUG, "stored key : {:?} locally", key);
         }
 

@@ -15,7 +15,11 @@ pub enum Error {
     /// Variant returned if the client was unable to interpret the server response
     InvalidServerResponse { reason: String },
     /// Variant returned when either PUT or GET quorums are not met
-    QuorumNotReached { required: usize, got: usize },
+    QuorumNotReached {
+        operation: String,
+        required: usize,
+        got: usize,
+    },
     /// Error for GET requests when the key doesn't exist
     NotFound {
         #[serde(with = "serde_utf8_bytes")]

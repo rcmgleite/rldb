@@ -2,7 +2,10 @@
 use crate::{
     cluster::state::Node,
     cmd::{
-        cluster::{heartbeat::HeartbeatResponse, join_cluster::JoinClusterResponse},
+        cluster::{
+            cluster_state::ClusterStateResponse, heartbeat::HeartbeatResponse,
+            join_cluster::JoinClusterResponse,
+        },
         get::GetResponse,
         ping::PingResponse,
         put::PutResponse,
@@ -39,6 +42,8 @@ pub trait Client {
         &mut self,
         known_cluster_node_addr: String,
     ) -> error::Result<JoinClusterResponse>;
+    /// ClusterState command interface
+    async fn cluster_state(&mut self) -> error::Result<ClusterStateResponse>;
 }
 
 /// Factory is the abstraction that allows different [`Client`] to be used by the cluster [crate::cluster::state]

@@ -7,6 +7,7 @@ pub mod put;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cluster::cluster_state::ClusterState as ClusterStateCommand;
 use cluster::heartbeat::Heartbeat as HeartbeatCommand;
 use cluster::join_cluster::JoinCluster as JoinClusterCommand;
 use get::Get as GetCommand;
@@ -25,6 +26,8 @@ use crate::{
     server::message::Message,
 };
 
+use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
+
 /// Command definition - this enum contains all commands implemented by rldb.
 ///
 /// TODO: Note - we are mixing cluster and client commands here... it might be better to split them in the future.
@@ -35,6 +38,7 @@ pub enum Command {
     Put(PutCommand),
     Heartbeat(HeartbeatCommand),
     JoinCluster(JoinClusterCommand),
+    ClusterState(ClusterStateCommand),
 }
 
 /// macro that tries to construct a specific [`Command`] from a [`Message`]
@@ -96,6 +100,13 @@ impl Command {
                     Self::serialize_response_payload(payload),
                 )
             }
+            Command::ClusterState(cmd) => {
+                let payload = cmd.execute(db).await;
+                Message::new(
+                    CMD_CLUSTER_CLUSTER_STATE,
+                    Self::serialize_response_payload(payload),
+                )
+            }
         }
     }
 
@@ -119,6 +130,10 @@ impl Command {
             CMD_CLUSTER_JOIN_CLUSTER => Ok(Command::JoinCluster(try_from_message_with_payload!(
                 message,
                 JoinClusterCommand
+            )?)),
+            CMD_CLUSTER_CLUSTER_STATE => Ok(Command::ClusterState(try_from_message_with_payload!(
+                message,
+                ClusterStateCommand
             )?)),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", message.id);

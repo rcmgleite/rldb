@@ -6,6 +6,7 @@ use rldb::{
 use serial_test::serial;
 use tokio::sync::oneshot::{channel, Receiver};
 
+// TODO: extract to utils
 async fn shutdown(receiver: Receiver<()>) {
     let _ = receiver.await;
 }
@@ -13,7 +14,7 @@ async fn shutdown(receiver: Receiver<()>) {
 /// Simple PUT followed by GET in standalone mode
 #[tokio::test]
 #[serial]
-async fn test_put_get_success() {
+async fn test_standalone_put_get_success() {
     let mut server = Server::from_config("tests/conf/test_standalone.json".into())
         .await
         .expect("Unable to construct server from config");
@@ -34,14 +35,14 @@ async fn test_put_get_success() {
     let response = client.get(key, false).await.unwrap();
     assert_eq!(response.value, value);
 
-    shutdown_sender.send(()).unwrap();
+    drop(shutdown_sender);
     server_handle.await.unwrap();
 }
 
 /// Get error case -> NotFound
 #[tokio::test]
 #[serial]
-async fn get_not_found() {
+async fn test_standalone_get_not_found() {
     let mut server = Server::from_config("tests/conf/test_standalone.json".into())
         .await
         .expect("Unable to construct server from config");
@@ -70,6 +71,6 @@ async fn get_not_found() {
         }
     }
 
-    shutdown_sender.send(()).unwrap();
+    drop(shutdown_sender);
     server_handle.await.unwrap();
 }
