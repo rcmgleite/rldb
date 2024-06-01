@@ -17,6 +17,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use bytes::Bytes;
+use futures::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::{
@@ -71,7 +72,7 @@ impl Server {
                 Ok(Self {
                     client_listener: listener,
                     cluster_listener: None,
-                    db: Arc::new(Db::new(storage_engine, None)),
+                    db: Arc::new(Db::new(storage_engine, None, None)),
                 })
             }
 
@@ -80,8 +81,7 @@ impl Server {
                 storage_engine,
                 partitioning_scheme,
                 gossip,
-                // TODO: wire quorum configs once this feature is implemented
-                quorum: _,
+                quorum,
             }) => {
                 let client_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
 
@@ -95,10 +95,7 @@ impl Server {
                     config::PartitioningScheme::ConsistentHashing => {
                         // let own_addr = Bytes::from(local_ip().unwrap().to_string());
                         let own_addr = Bytes::from(format!("127.0.0.1:{}", gossip.port));
-                        Arc::new(State::new(
-                            Box::new(ConsistentHashing::default()),
-                            own_addr,
-                        )?)
+                        Arc::new(State::new(Box::<ConsistentHashing>::default(), own_addr)?)
                     }
                 };
 
@@ -112,7 +109,11 @@ impl Server {
                 Ok(Self {
                     client_listener,
                     cluster_listener: Some(cluster_listener),
-                    db: Arc::new(Db::new(storage_engine, Some(partitioning_scheme))),
+                    db: Arc::new(Db::new(
+                        storage_engine,
+                        Some(partitioning_scheme),
+                        Some(quorum),
+                    )),
                 })
             }
         }
@@ -120,9 +121,13 @@ impl Server {
 
     /// This is the main loop of [`Server`]. When this is called, new TCP connections
     /// will be accepted and requests handled.
-    pub async fn run(&mut self) -> Result<()> {
+    ///
+    /// TODO: shutdown is not fully implemented yet.. we are not waiting for inflight
+    /// requests to finish/drain for example..
+    pub async fn run(&mut self, shutdown: impl Future) -> Result<()> {
         event!(Level::INFO, "Listener started");
 
+        tokio::pin!(shutdown);
         // if we have a cluster listener, accept connection from both client and cluster listeners.
         if let Some(cluster_listener) = self.cluster_listener.take() {
             loop {
@@ -133,6 +138,10 @@ impl Server {
                     Ok((conn, _)) = cluster_listener.accept() => {
                         conn
                     }
+                    _ = &mut shutdown => {
+                        event!(Level::WARN, "shutting down");
+                        return Ok(());
+                    }
                 };
 
                 let db = self.db.clone();
@@ -141,9 +150,16 @@ impl Server {
         } else {
             // otherwise only listen to client connections
             loop {
-                let (conn, _) = self.client_listener.accept().await?;
-                let db = self.db.clone();
-                tokio::spawn(handle_connection(conn, db));
+                tokio::select! {
+                    Ok((conn, _)) = self.client_listener.accept() => {
+                        let db = self.db.clone();
+                        tokio::spawn(handle_connection(conn, db));
+                    }
+                    _ = &mut shutdown => {
+                        event!(Level::WARN, "shutting down");
+                        return Ok(());
+                    }
+                }
             }
         }
     }

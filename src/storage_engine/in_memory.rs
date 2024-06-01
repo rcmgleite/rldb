@@ -39,7 +39,7 @@ impl InMemory {
 impl StorageEngine for InMemory {
     async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let guard = self.acquire_lock()?;
-        Ok(guard.get(key).map(Clone::clone))
+        Ok(guard.get(key).cloned())
     }
 
     async fn put(&self, key: Bytes, value: Bytes) -> Result<()> {

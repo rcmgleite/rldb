@@ -19,4 +19,7 @@ pub trait PartitioningScheme {
 
     /// returns the owner of a given key
     fn key_owner(&self, key: &[u8]) -> Result<Bytes>;
+
+    /// returns the list of nodes in which the given key should reside
+    fn preference_list(&self, key: &[u8], list_size: usize) -> Result<Vec<Bytes>>;
 }

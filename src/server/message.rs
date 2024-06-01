@@ -12,7 +12,7 @@ use crate::error::Result;
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
 /// than 1Mb of memory...
-pub const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// The unit of the protocol built on top of TCP
 /// that this server uses.

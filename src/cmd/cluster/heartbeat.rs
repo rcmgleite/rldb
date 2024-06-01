@@ -58,5 +58,5 @@ impl IntoMessage for Heartbeat {
 /// [Heartbeat] deserialized response payload
 #[derive(Serialize, Deserialize)]
 pub struct HeartbeatResponse {
-    message: String,
+    pub message: String,
 }

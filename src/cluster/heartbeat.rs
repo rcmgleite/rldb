@@ -48,7 +48,7 @@ pub async fn start_heartbeat(cluster_state: Arc<State>) {
 
     // Now we loop every X seconds to hearbeat to one node in the cluster
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         if let Err(err) = do_heartbeat(
             cluster_state.clone(),
             Box::new(DbClientFactory),
@@ -357,7 +357,7 @@ mod tests {
         .unwrap();
 
         match err {
-            crate::cluster::error::Error::Client(Error::GenericIo { .. }) => {}
+            crate::cluster::error::Error::Client(Error::Io { .. }) => {}
             _ => {
                 panic!("Unexpected error: {}", err)
             }

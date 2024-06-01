@@ -29,6 +29,18 @@ pub enum Error {
     Generic {
         reason: String,
     },
+    QuorumNotReached {
+        operation: String,
+        required: usize,
+        got: usize,
+    },
+}
+
+impl Error {
+    /// Returns true if this is an instance of a [`Error::NotFound`] variant
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Error::NotFound { .. })
+    }
 }
 
 impl Display for Error {
@@ -59,9 +71,38 @@ impl From<crate::cluster::error::Error> for Error {
     }
 }
 
+impl From<crate::client::error::Error> for Error {
+    fn from(err: crate::client::error::Error) -> Self {
+        match err {
+            crate::client::error::Error::UnableToConnect { reason } => Self::Io { reason },
+            crate::client::error::Error::InvalidRequest { reason } => {
+                Self::InvalidRequest { reason }
+            }
+            crate::client::error::Error::InvalidServerResponse { reason } => {
+                Self::Internal(Internal::Unknown { reason })
+            }
+            crate::client::error::Error::QuorumNotReached {
+                operation,
+                required,
+                got,
+            } => Self::QuorumNotReached {
+                operation,
+                required,
+                got,
+            },
+            crate::client::error::Error::NotFound { key } => Self::NotFound { key },
+            crate::client::error::Error::Io { reason } => Self::Io { reason },
+            crate::client::error::Error::Generic { reason } => Self::Generic { reason },
+            crate::client::error::Error::Logic { reason } => {
+                Self::Internal(Internal::Unknown { reason })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub enum Internal {
-    Unknown,
+    Unknown { reason: String },
     StorageEngine(crate::storage_engine::Error),
     Cluster(crate::cluster::error::Error),
 }

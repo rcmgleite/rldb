@@ -3,6 +3,15 @@
 //! Still WIP... might be completely removed in favor of a package like mockall
 use crate::{
     cluster::state::Node,
+    cmd::{
+        cluster::{
+            cluster_state::ClusterStateResponse, heartbeat::HeartbeatResponse,
+            join_cluster::JoinClusterResponse,
+        },
+        get::GetResponse,
+        ping::PingResponse,
+        put::PutResponse,
+    },
     test_utils::fault::{Fault, When},
 };
 
@@ -60,33 +69,39 @@ impl Client for MockClient {
 
         Ok(())
     }
-    async fn ping(&mut self) -> Result<serde_json::Value> {
+    async fn ping(&mut self) -> Result<PingResponse> {
         todo!()
     }
-    async fn get(&mut self, _key: Bytes) -> Result<serde_json::Value> {
+    async fn get(&mut self, _key: Bytes, _replica: bool) -> Result<GetResponse> {
         todo!()
     }
-    async fn put(&mut self, _key: Bytes, _value: Bytes) -> Result<serde_json::Value> {
+    async fn put(&mut self, _key: Bytes, _value: Bytes, _replication: bool) -> Result<PutResponse> {
         todo!()
     }
-    async fn heartbeat(&mut self, _: Vec<Node>) -> Result<serde_json::Value> {
+    async fn heartbeat(&mut self, _: Vec<Node>) -> Result<HeartbeatResponse> {
         self.stats.heartbeat.n_calls += 1;
         let fault = &self.faults.heartbeat;
         match fault.when {
             When::Always => {
-                return Err(Error::GenericIo {
+                return Err(Error::Io {
                     reason: "Mocked error on heartbeat".to_string(),
                 });
             }
             When::Never => { /* noop */ }
         }
 
-        Ok(Default::default())
+        Ok(HeartbeatResponse {
+            message: "Ok".to_string(),
+        })
     }
     async fn join_cluster(
         &mut self,
         _known_cluster_node_addr: String,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<JoinClusterResponse> {
+        todo!()
+    }
+
+    async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
         todo!()
     }
 }

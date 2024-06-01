@@ -23,12 +23,21 @@ impl PartitioningScheme for MockPartitioningScheme {
         Ok(())
     }
 
+    #[allow(clippy::never_loop)]
     fn key_owner(&self, _key: &[u8]) -> crate::cluster::error::Result<Bytes> {
         for key in self.nodes.iter() {
             return Ok(key.clone());
         }
-        return Err(crate::cluster::error::Error::Internal {
+        Err(crate::cluster::error::Error::Internal {
             reason: "mock".to_string(),
-        });
+        })
+    }
+
+    fn preference_list(
+        &self,
+        _key: &[u8],
+        _list_size: usize,
+    ) -> crate::cluster::error::Result<Vec<Bytes>> {
+        todo!()
     }
 }
