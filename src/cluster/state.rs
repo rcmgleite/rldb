@@ -151,11 +151,9 @@ impl State {
                 // while other nodes in the cluster will have the node register at a much greater tick.
                 // so here we check for own node and increase our own tick to make sure our version is the most up
                 // to date
-                if node.addr == own_addr {
-                    if node.tick > node_current_view.tick {
-                        node_current_view.tick = node.tick + 1000;
-                        continue;
-                    }
+                if node.addr == own_addr && node.tick > node_current_view.tick {
+                    node_current_view.tick = node.tick + 1000;
+                    continue;
                 }
 
                 // current view is stale, let's update it
@@ -208,12 +206,12 @@ impl State {
                 reason: "Unable to find node inside RingState. This should never happen."
                     .to_string(),
             })
-            .map(|node| node.clone())
+            .cloned()
     }
 
     pub fn get_nodes(&self) -> Result<Vec<Node>> {
         let guard = self.acquire_lock()?;
-        Ok(guard.nodes.iter().map(|(_, v)| v.clone()).collect())
+        Ok(guard.nodes.values().map(Clone::clone).collect())
     }
 
     /// Returns a random not that is not self

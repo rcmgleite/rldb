@@ -137,9 +137,9 @@ impl Command {
             )?)),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", message.id);
-                return Err(Error::InvalidRequest {
+                Err(Error::InvalidRequest {
                     reason: format!("Unrecognized command: {}", message.id),
-                });
+                })
             }
         }
     }

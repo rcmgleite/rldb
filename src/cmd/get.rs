@@ -43,9 +43,9 @@ impl Get {
             event!(Level::INFO, "executing a replica GET");
             let value = db.get(&self.key).await?;
             if let Some(value) = value {
-                return Ok(GetResponse { value });
+                Ok(GetResponse { value })
             } else {
-                return Err(Error::NotFound { key: self.key });
+                Err(Error::NotFound { key: self.key })
             }
         } else {
             event!(Level::INFO, "executing a non-replica GET");
@@ -100,17 +100,17 @@ impl Get {
                     return Err(Error::NotFound { key: self.key });
                 }
 
-                return Err(Error::QuorumNotReached {
+                Err(Error::QuorumNotReached {
                     operation: "Get".to_string(),
                     required: quorum_config.reads,
                     got: successes,
-                });
+                })
             } else {
                 let value = db.get(&self.key).await?;
                 if let Some(value) = value {
-                    return Ok(GetResponse { value });
+                    Ok(GetResponse { value })
                 } else {
-                    return Err(Error::NotFound { key: self.key });
+                    Err(Error::NotFound { key: self.key })
                 }
             }
         }
@@ -125,9 +125,9 @@ impl Get {
             );
             let res = db.get(&key).await?;
             if let Some(res) = res {
-                return Ok(res);
+                Ok(res)
             } else {
-                return Err(Error::NotFound { key });
+                Err(Error::NotFound { key })
             }
         } else {
             event!(

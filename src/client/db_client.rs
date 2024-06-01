@@ -147,7 +147,7 @@ impl Client for DbClient {
     }
 
     async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
-        let cmd = cmd::cluster::cluster_state::ClusterState::new();
+        let cmd = cmd::cluster::cluster_state::ClusterState;
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;

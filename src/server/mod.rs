@@ -95,10 +95,7 @@ impl Server {
                     config::PartitioningScheme::ConsistentHashing => {
                         // let own_addr = Bytes::from(local_ip().unwrap().to_string());
                         let own_addr = Bytes::from(format!("127.0.0.1:{}", gossip.port));
-                        Arc::new(State::new(
-                            Box::new(ConsistentHashing::default()),
-                            own_addr,
-                        )?)
+                        Arc::new(State::new(Box::<ConsistentHashing>::default(), own_addr)?)
                     }
                 };
 

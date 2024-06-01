@@ -50,7 +50,7 @@ impl Put {
         if self.replication {
             event!(Level::DEBUG, "Executing a replication Put");
             // if this is a replication PUT, we don't have to deal with quorum
-            db.put(self.key.into(), self.value.into()).await?;
+            db.put(self.key, self.value).await?;
         } else {
             event!(Level::DEBUG, "Executing a coordinator Put");
             // if this is not a replication PUT, we have to honor quorum before returning a success
@@ -102,7 +102,7 @@ impl Put {
                     });
                 }
             } else {
-                db.put(self.key.into(), self.value.into()).await?;
+                db.put(self.key, self.value).await?;
             }
         }
 

@@ -11,14 +11,10 @@ use crate::{cluster::state::Node, db::Db, error::Result, server::message::IntoMe
 pub const CMD_CLUSTER_CLUSTER_STATE: u32 = 102;
 
 /// ClusterState deserialized [`crate::cmd::Command`]
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct ClusterState;
 
 impl ClusterState {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Executes a [`ClusterState`] command.
     pub async fn execute(self, db: Arc<Db>) -> Result<ClusterStateResponse> {
         let cluster_state = db.cluster_state()?;
