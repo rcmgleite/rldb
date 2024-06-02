@@ -9,6 +9,8 @@ use tracing::{event, Level};
 
 use crate::client::db_client::DbClient;
 use crate::client::Client;
+use crate::cluster::quorum::min_required_replicas::MinRequiredReplicas;
+use crate::cluster::quorum::{Evaluation, OperationStatus, Quorum};
 use crate::db::{Db, OwnsKeyResponse};
 use crate::error::{Error, Result};
 use crate::server::message::IntoMessage;
@@ -64,8 +66,9 @@ impl Put {
             }
 
             // if we have a quorum config, we have to make sure we wrote to enough replicas
-            if let Some(quorum) = db.quorum_config() {
-                let mut successful_writes = 0;
+            if let Some(quorum_config) = db.quorum_config() {
+                let mut quorum =
+                    MinRequiredReplicas::new(quorum_config.replicas, quorum_config.writes)?;
                 let mut futures = FuturesUnordered::new();
 
                 // the preference list will contain the node itself (otherwise there's a bug).
@@ -86,20 +89,34 @@ impl Put {
                 while let Some(res) = futures.next().await {
                     match res {
                         Ok(_) => {
-                            successful_writes += 1;
+                            let _ = quorum.update(OperationStatus::Success(()));
                         }
                         Err(err) => {
                             event!(Level::WARN, "Failed a PUT: {:?}", err);
+                            let _ = quorum.update(OperationStatus::Failure(err));
                         }
                     }
                 }
 
-                if successful_writes < quorum.writes {
-                    return Err(Error::QuorumNotReached {
-                        operation: "Put".to_string(),
-                        required: quorum.writes,
-                        got: successful_writes,
-                    });
+                let quorum_result = quorum.finish();
+
+                match quorum_result.evaluation {
+                    Evaluation::Reached => {}
+                    Evaluation::NotReached | Evaluation::Unreachable => {
+                        event!(
+                            Level::WARN,
+                            "quorum not reached: successes: {}, failures: {}",
+                            quorum_result.successes.len(),
+                            quorum_result.failures.len(),
+                        );
+                        return Err(Error::QuorumNotReached {
+                            operation: "Put".to_string(),
+                            reason: format!(
+                                "Unable to execute a min of {} PUTs",
+                                quorum_config.writes
+                            ),
+                        });
+                    }
                 }
             } else {
                 db.put(self.key, self.value).await?;

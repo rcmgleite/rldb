@@ -145,16 +145,9 @@ async fn test_cluster_put_no_quorum() {
     match err {
         client::error::Error::QuorumNotReached {
             operation,
-            required,
-            got,
+            reason: _,
         } => {
             assert_eq!(&operation, "Put");
-            // 2 are required to succeed the put
-            assert_eq!(required, 2);
-            // only one will actually have succeeded (self)
-            // Note that this behavior is still kind of odd.. a cluster with a single node could possibly
-            // be considered in bad state and requests should likely be rejected at this point...
-            assert_eq!(got, 1);
         }
         _ => {
             panic!("Unexpected error: {}", err);
@@ -204,13 +197,9 @@ async fn test_cluster_get_no_quorum() {
     match err {
         client::error::Error::QuorumNotReached {
             operation,
-            required,
-            got,
+            reason: _,
         } => {
             assert_eq!(&operation, "Get");
-            assert_eq!(required, 2);
-            // one Get (self on local Db) succeeded
-            assert_eq!(got, 1);
         }
         _ => {
             panic!("Unexpected error: {}", err);
