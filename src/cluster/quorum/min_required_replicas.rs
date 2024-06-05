@@ -1,10 +1,17 @@
-//! MinRequiredSuccesses is a simple quorum algorithm that returns [`Evaluation::Reached`] if the Hash of the value T
-//! provided in [`Quorum::update`] appeared more than the configured minimum times.
+//! MinRequiredReplicas is a simple quorum algorithm that returns [`Evaluation::Reached`] enough calls to
+//! [`Quorum::update`] are issued with [`OperationStatus::Success`] as argument.
+//!
+//! If the quorum is unreachable, calls to update will return [`Evaluation::Unreachable`].
+//! If the quorum was not reached, but still can, calls to update will return [`Evaluation::NotReached`]
+//! Finally, if quorum was reached, calls to update will return [`Evaluation::Reached`]
+//!
+//! Note that the number of calls to [`Quorum::update`] is bound by the [`MinRequiredReplicas::new`] n_replicas argument.
+//! If you call update more than n_replicas times an error will be returned.
 use super::{Evaluation, OperationStatus, Quorum, QuorumResult};
 use crate::cluster::error::{Error, Result};
 use std::hash::Hash;
 
-/// Handle of a MinRequiredSuccess [`Quorum`] type
+/// Definition of a MinRequiredReplicas [`Quorum`] type
 #[derive(Debug)]
 pub struct MinRequiredReplicas<T, E> {
     /// Number of replicas that were not yet evaluated. This is initially set to the total number of replicas
