@@ -31,8 +31,7 @@ pub enum Error {
     },
     QuorumNotReached {
         operation: String,
-        required: usize,
-        got: usize,
+        reason: String,
     },
 }
 
@@ -81,15 +80,9 @@ impl From<crate::client::error::Error> for Error {
             crate::client::error::Error::InvalidServerResponse { reason } => {
                 Self::Internal(Internal::Unknown { reason })
             }
-            crate::client::error::Error::QuorumNotReached {
-                operation,
-                required,
-                got,
-            } => Self::QuorumNotReached {
-                operation,
-                required,
-                got,
-            },
+            crate::client::error::Error::QuorumNotReached { operation, reason } => {
+                Self::QuorumNotReached { operation, reason }
+            }
             crate::client::error::Error::NotFound { key } => Self::NotFound { key },
             crate::client::error::Error::Io { reason } => Self::Io { reason },
             crate::client::error::Error::Generic { reason } => Self::Generic { reason },
@@ -102,6 +95,7 @@ impl From<crate::client::error::Error> for Error {
 
 #[derive(Debug, Serialize)]
 pub enum Internal {
+    Logic { reason: String },
     Unknown { reason: String },
     StorageEngine(crate::storage_engine::Error),
     Cluster(crate::cluster::error::Error),
