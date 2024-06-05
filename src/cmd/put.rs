@@ -86,6 +86,8 @@ impl Put {
                 // for now, let's wait til all futures either succeed or fail.
                 // we don't strictly need that since we are quorum based..
                 // doing it this way now for simplicity but this will have a latency impact
+                //
+                // For more info, see similar comment on [`crate::cmd::get::Get`]
                 while let Some(res) = futures.next().await {
                     match res {
                         Ok(_) => {

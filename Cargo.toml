@@ -1,6 +1,6 @@
 [package]
 name = "rldb"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "A dynamo-like key/value database written in rust"
 authors = ["Rafael Leite"]

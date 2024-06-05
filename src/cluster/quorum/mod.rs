@@ -21,10 +21,14 @@ pub enum Evaluation {
     Unreachable,
 }
 
+/// The result of a [`Quorum::finish`] call
 #[derive(Debug)]
 pub struct QuorumResult<T, E> {
+    /// The quorum evaluation - see [`Evaluation`]
     pub evaluation: Evaluation,
+    /// successful items
     pub successes: Vec<T>,
+    /// failed items
     pub failures: Vec<E>,
 }
 

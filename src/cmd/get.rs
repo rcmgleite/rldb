@@ -64,6 +64,11 @@ impl Get {
 
                 // TODO: we are waiting for all nodes on the preference list to return either error or success
                 // this will cause latency issues and it's no necessary.. fix it later
+                // Note: The [`crate::cluster::quorum::Quorum`] API already handles early evaluation
+                // in case quorum is not reachable. The change to needed here is fairly small in this regard.
+                // What's missing is deciding on:
+                //  1. what do we do with inflight requests in case of an early success?
+                //  2. (only for the PUT case) what do we do with successful PUT requests? rollback? what does that look like?
                 while let Some(res) = futures.next().await {
                     match res {
                         Ok(res) => {

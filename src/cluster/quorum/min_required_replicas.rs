@@ -22,6 +22,9 @@ pub struct MinRequiredReplicas<T, E> {
 
 impl<T, E> MinRequiredReplicas<T, E> {
     /// Constructs a new instance of [`MinRequiredReplicas`]
+    ///
+    /// # Error
+    /// This function returns an error if the provided `n_replicas` arugment is less than `required_successes`
     pub fn new(n_replicas: usize, required_successes: usize) -> Result<Self> {
         if n_replicas < required_successes {
             return Err(Error::Logic {
