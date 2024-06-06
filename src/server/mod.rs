@@ -18,6 +18,7 @@ use crate::error::{Error, Result};
 use crate::storage_engine::in_memory::InMemory;
 use bytes::Bytes;
 use futures::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::{
@@ -117,6 +118,10 @@ impl Server {
                 })
             }
         }
+    }
+
+    pub fn client_listener_local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.client_listener.local_addr()
     }
 
     /// This is the main loop of [`Server`]. When this is called, new TCP connections

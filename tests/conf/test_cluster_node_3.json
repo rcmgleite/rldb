@@ -1,9 +1,9 @@
 {
     "cluster": {
-        "port": 3003,
+        "port": 0,
         "storage_engine": "in_memory",
         "gossip": {
-            "port": 4003
+            "port": 0
         },
         "quorum": {
             "n": 3,

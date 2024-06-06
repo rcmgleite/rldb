@@ -56,15 +56,6 @@ impl Put {
         } else {
             event!(Level::DEBUG, "Executing a coordinator Put");
             // if this is not a replication PUT, we have to honor quorum before returning a success
-            if let OwnsKeyResponse::False { addr } = db.owns_key(&self.key)? {
-                return Err(Error::InvalidRequest {
-                    reason: format!(
-                        "Key owned by another node. Redirect request to node {:?}",
-                        addr
-                    ),
-                });
-            }
-
             // if we have a quorum config, we have to make sure we wrote to enough replicas
             if let Some(quorum_config) = db.quorum_config() {
                 let mut quorum =

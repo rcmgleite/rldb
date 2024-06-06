@@ -3,7 +3,6 @@ use rldb::{
     client::{db_client::DbClient, Client},
     server::Server,
 };
-use serial_test::serial;
 use tokio::sync::oneshot::{channel, Receiver};
 
 // TODO: extract to utils
@@ -13,17 +12,17 @@ async fn shutdown(receiver: Receiver<()>) {
 
 /// Simple PUT followed by GET in standalone mode
 #[tokio::test]
-#[serial]
 async fn test_standalone_put_get_success() {
     let mut server = Server::from_config("tests/conf/test_standalone.json".into())
         .await
         .expect("Unable to construct server from config");
+    let server_client_listener_addr = server.client_listener_local_addr().unwrap().to_string();
     let (shutdown_sender, shutdown_receiver) = channel();
     let server_handle = tokio::spawn(async move {
         server.run(shutdown(shutdown_receiver)).await.unwrap();
     });
 
-    let mut client = DbClient::new("127.0.0.1:3001".to_string());
+    let mut client = DbClient::new(server_client_listener_addr);
     client.connect().await.unwrap();
 
     let key = Bytes::from("A key");
@@ -41,17 +40,17 @@ async fn test_standalone_put_get_success() {
 
 /// Get error case -> NotFound
 #[tokio::test]
-#[serial]
 async fn test_standalone_get_not_found() {
     let mut server = Server::from_config("tests/conf/test_standalone.json".into())
         .await
         .expect("Unable to construct server from config");
+    let server_client_listener_addr = server.client_listener_local_addr().unwrap().to_string();
     let (shutdown_sender, shutdown_receiver) = channel();
     let server_handle = tokio::spawn(async move {
         server.run(shutdown(shutdown_receiver)).await.unwrap();
     });
 
-    let mut client = DbClient::new("127.0.0.1:3001".to_string());
+    let mut client = DbClient::new(server_client_listener_addr);
     client.connect().await.unwrap();
 
     let key_to_lookup = Bytes::from("A key");

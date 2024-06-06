@@ -6,7 +6,6 @@ use rldb::{
     cluster::state::NodeStatus,
     server::Server,
 };
-use serial_test::serial;
 use tokio::{
     sync::oneshot::{channel, Receiver, Sender},
     task::JoinHandle,
@@ -16,12 +15,19 @@ async fn shutdown_future(receiver: Receiver<()>) {
     let _ = receiver.await;
 }
 
-async fn start_servers(configs: Vec<PathBuf>) -> Vec<(JoinHandle<()>, Sender<()>)> {
+struct ServerHandle {
+    task_handle: JoinHandle<()>,
+    shutdown: Sender<()>,
+    client_listener_addr: String,
+}
+
+async fn start_servers(configs: Vec<PathBuf>) -> Vec<ServerHandle> {
     let mut handles = Vec::new();
     for config in configs {
         let mut server = Server::from_config(config)
             .await
             .expect("Unable to construct server from config");
+        let client_listener_addr = server.client_listener_local_addr().unwrap().to_string();
         let (shutdown_sender, shutdown_receiver) = channel();
         let server_handle = tokio::spawn(async move {
             server
@@ -30,7 +36,11 @@ async fn start_servers(configs: Vec<PathBuf>) -> Vec<(JoinHandle<()>, Sender<()>
                 .unwrap();
         });
 
-        handles.push((server_handle, shutdown_sender));
+        handles.push(ServerHandle {
+            task_handle: server_handle,
+            shutdown: shutdown_sender,
+            client_listener_addr,
+        });
     }
 
     handles
@@ -41,12 +51,12 @@ async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
     loop {
         let cluster_state = client.cluster_state().await.unwrap();
         if cluster_state.nodes.len() != n_nodes {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             continue;
         } else {
             for node in cluster_state.nodes {
                 if node.status != NodeStatus::Ok {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     continue;
                 }
             }
@@ -57,7 +67,6 @@ async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_cluster_put_get_success() {
     let handles = start_servers(vec![
         "tests/conf/test_cluster_node_1.json".into(),
@@ -66,11 +75,16 @@ async fn test_cluster_put_get_success() {
     ])
     .await;
 
-    let mut client = DbClient::new("127.0.0.1:3002".to_string());
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
     client.connect().await.unwrap();
-    client.join_cluster("127.0.0.1:3001".into()).await.unwrap();
-
-    client.join_cluster("127.0.0.1:3003".into()).await.unwrap();
+    client
+        .join_cluster(handles[1].client_listener_addr.clone())
+        .await
+        .unwrap();
+    client
+        .join_cluster(handles[2].client_listener_addr.clone())
+        .await
+        .unwrap();
 
     // loops until the cluster state is properly propageted through gossip
     wait_cluster_ready(&mut client, 3).await;
@@ -85,13 +99,12 @@ async fn test_cluster_put_get_success() {
     assert_eq!(response.value, value);
 
     for handle in handles {
-        drop(handle.1);
-        handle.0.await.unwrap();
+        drop(handle.shutdown);
+        handle.task_handle.await.unwrap();
     }
 }
 
 #[tokio::test]
-#[serial]
 async fn test_cluster_key_not_found() {
     let handles = start_servers(vec![
         "tests/conf/test_cluster_node_1.json".into(),
@@ -100,11 +113,16 @@ async fn test_cluster_key_not_found() {
     ])
     .await;
 
-    let mut client = DbClient::new("127.0.0.1:3002".to_string());
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
     client.connect().await.unwrap();
-    client.join_cluster("127.0.0.1:3001".into()).await.unwrap();
-
-    client.join_cluster("127.0.0.1:3003".into()).await.unwrap();
+    client
+        .join_cluster(handles[1].client_listener_addr.clone())
+        .await
+        .unwrap();
+    client
+        .join_cluster(handles[2].client_listener_addr.clone())
+        .await
+        .unwrap();
 
     wait_cluster_ready(&mut client, 3).await;
 
@@ -120,17 +138,16 @@ async fn test_cluster_key_not_found() {
     }
 
     for handle in handles {
-        drop(handle.1);
-        handle.0.await.unwrap();
+        drop(handle.shutdown);
+        handle.task_handle.await.unwrap();
     }
 }
 
 #[tokio::test]
-#[serial]
 async fn test_cluster_put_no_quorum() {
     let handles = start_servers(vec!["tests/conf/test_cluster_node_1.json".into()]).await;
 
-    let mut client = DbClient::new("127.0.0.1:3001".to_string());
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
     client.connect().await.unwrap();
 
     let key = Bytes::from("foo");
@@ -155,13 +172,12 @@ async fn test_cluster_put_no_quorum() {
     }
 
     for handle in handles {
-        drop(handle.1);
-        handle.0.await.unwrap();
+        drop(handle.shutdown);
+        handle.task_handle.await.unwrap();
     }
 }
 
 #[tokio::test]
-#[serial]
 async fn test_cluster_get_no_quorum() {
     let mut handles = start_servers(vec![
         "tests/conf/test_cluster_node_1.json".into(),
@@ -170,11 +186,16 @@ async fn test_cluster_get_no_quorum() {
     ])
     .await;
 
-    let mut client = DbClient::new("127.0.0.1:3002".to_string());
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
     client.connect().await.unwrap();
-    client.join_cluster("127.0.0.1:3001".into()).await.unwrap();
-
-    client.join_cluster("127.0.0.1:3003".into()).await.unwrap();
+    client
+        .join_cluster(handles[1].client_listener_addr.clone())
+        .await
+        .unwrap();
+    client
+        .join_cluster(handles[2].client_listener_addr.clone())
+        .await
+        .unwrap();
 
     // loops until the cluster state is properly propageted through gossip
     wait_cluster_ready(&mut client, 3).await;
@@ -186,12 +207,12 @@ async fn test_cluster_get_no_quorum() {
     assert_eq!(response.message, "Ok".to_string());
 
     // kill 2 of the serves
-    let handle_3001 = handles.remove(0);
-    drop(handle_3001.1);
-    handle_3001.0.await.unwrap();
-    let handle_3003 = handles.remove(1);
-    drop(handle_3003.1);
-    handle_3003.0.await.unwrap();
+    let handle = handles.remove(1);
+    drop(handle.shutdown);
+    handle.task_handle.await.unwrap();
+    let handle = handles.remove(1);
+    drop(handle.shutdown);
+    handle.task_handle.await.unwrap();
 
     let err = client.get(key, false).await.err().unwrap();
     match err {
@@ -207,7 +228,7 @@ async fn test_cluster_get_no_quorum() {
     }
 
     for handle in handles {
-        drop(handle.1);
-        handle.0.await.unwrap();
+        drop(handle.shutdown);
+        handle.task_handle.await.unwrap();
     }
 }
