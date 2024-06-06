@@ -69,11 +69,11 @@ cargo run --bin rldb-server -- --config-path conf/cluster_node_3.json
 
 2. Include the new nodes to the cluster
 
-In this example, we assume node on port 4001 to be the initial cluster node and we add the other nodes to it.
+In this example, we assume node on port 3001 to be the initial cluster node and we add the other nodes to it.
 
 ```
-cargo run --bin rldb-client join-cluster -p 4002 --known-cluster-node 127.0.0.1:4001
-cargo run --bin rldb-client join-cluster -p 4003 --known-cluster-node 127.0.0.1:4001
+cargo run --bin rldb-client join-cluster -p 3002 --known-cluster-node 127.0.0.1:3001
+cargo run --bin rldb-client join-cluster -p 3003 --known-cluster-node 127.0.0.1:3001
 ```
 
 ### PUT

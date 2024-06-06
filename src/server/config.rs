@@ -36,14 +36,7 @@ pub struct ClusterConfig {
     pub port: u16,
     pub storage_engine: StorageEngine,
     pub partitioning_scheme: PartitioningScheme,
-    pub gossip: Gossip,
     pub quorum: Quorum,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Gossip {
-    pub port: u16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,7 +60,7 @@ pub enum PartitioningScheme {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::server::config::{ClusterConfig, Gossip, PartitioningScheme, Quorum};
+    use crate::server::config::{ClusterConfig, PartitioningScheme, Quorum};
 
     use super::{ClusterType, Config, StandaloneConfig, StorageEngine};
 
@@ -112,7 +105,6 @@ mod tests {
                         reads: 2,
                         writes: 2,
                     },
-                    gossip: Gossip { port: 4001 }
                 }),
             }
         ));

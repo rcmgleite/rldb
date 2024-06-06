@@ -37,9 +37,6 @@ pub mod message;
 pub struct Server {
     /// listener for incoming client requests
     client_listener: TcpListener,
-    /// listener for incoming cluster (gossip) requests
-    /// Only exists in cluster configuration
-    cluster_listener: Option<TcpListener>,
     /// The underlying [`Db`] used to store data and manage cluster state
     db: Arc<Db>,
 }
@@ -72,7 +69,6 @@ impl Server {
 
                 Ok(Self {
                     client_listener: listener,
-                    cluster_listener: None,
                     db: Arc::new(Db::new(storage_engine, None, None)),
                 })
             }
@@ -81,7 +77,6 @@ impl Server {
                 port,
                 storage_engine,
                 partitioning_scheme,
-                gossip,
                 quorum,
             }) => {
                 let client_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
@@ -93,15 +88,11 @@ impl Server {
                 // configure the partitioning_scheme. This step already
                 // includes the node itself to the ring.
                 let partitioning_scheme = match partitioning_scheme {
-                    config::PartitioningScheme::ConsistentHashing => {
-                        // let own_addr = Bytes::from(local_ip().unwrap().to_string());
-                        let own_addr = Bytes::from(format!("127.0.0.1:{}", gossip.port));
-                        Arc::new(State::new(Box::<ConsistentHashing>::default(), own_addr)?)
-                    }
+                    config::PartitioningScheme::ConsistentHashing => Arc::new(State::new(
+                        Box::<ConsistentHashing>::default(),
+                        client_listener.local_addr().unwrap().to_string().into(),
+                    )?),
                 };
-
-                let cluster_listener =
-                    TcpListener::bind(format!("127.0.0.1:{}", gossip.port)).await?;
 
                 // FIXME: There's a big problem here - if this task exists how will
                 // the node know that it has to shutdown? Something to be fixed soon...
@@ -109,7 +100,6 @@ impl Server {
 
                 Ok(Self {
                     client_listener,
-                    cluster_listener: Some(cluster_listener),
                     db: Arc::new(Db::new(
                         storage_engine,
                         Some(partitioning_scheme),
@@ -133,37 +123,15 @@ impl Server {
         event!(Level::INFO, "Listener started");
 
         tokio::pin!(shutdown);
-        // if we have a cluster listener, accept connection from both client and cluster listeners.
-        if let Some(cluster_listener) = self.cluster_listener.take() {
-            loop {
-                let conn = tokio::select! {
-                    Ok((conn, _)) = self.client_listener.accept() => {
-                       conn
-                    }
-                    Ok((conn, _)) = cluster_listener.accept() => {
-                        conn
-                    }
-                    _ = &mut shutdown => {
-                        event!(Level::WARN, "shutting down");
-                        return Ok(());
-                    }
-                };
-
-                let db = self.db.clone();
-                tokio::spawn(handle_connection(conn, db));
-            }
-        } else {
-            // otherwise only listen to client connections
-            loop {
-                tokio::select! {
-                    Ok((conn, _)) = self.client_listener.accept() => {
-                        let db = self.db.clone();
-                        tokio::spawn(handle_connection(conn, db));
-                    }
-                    _ = &mut shutdown => {
-                        event!(Level::WARN, "shutting down");
-                        return Ok(());
-                    }
+        loop {
+            tokio::select! {
+                Ok((conn, _)) = self.client_listener.accept() => {
+                    let db = self.db.clone();
+                    tokio::spawn(handle_connection(conn, db));
+                }
+                _ = &mut shutdown => {
+                    event!(Level::WARN, "shutting down");
+                    return Ok(());
                 }
             }
         }
