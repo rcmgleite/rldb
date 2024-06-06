@@ -4,6 +4,8 @@
 use bytes::Bytes;
 use std::sync::Arc;
 
+pub mod versioning;
+
 use crate::{
     cluster::state::{Node, State},
     error::{Error, Result},
