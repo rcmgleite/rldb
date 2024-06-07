@@ -31,10 +31,14 @@ The set of features implemented are:
    - [Done] failure detection
    - [Done] partitioning ownership propagation
    - [TODO] reshuffling after cluster changes
-   - [TODO] versioning and conflict detection (using vector clocks/version vectors)
-- [TODO] leaderless replication for partitions
-- [TODO] Read repair
-- [TODO] Active anti-entropy
+   - [WIP] versioning 
+      - [Done] VersionVector implementation
+      - [TODO] conflict detection and resolution (client based resolution)
+- [Done] leaderless replication for partitions
+- [TODO] Repair/Reconciliation
+      - [TODO] Read repair
+      - [TODO] Active anti-entropy
+          - [TODO] Merkle trees
 
 Finally, this repo will also touch on topics like
 - Rust best practices
