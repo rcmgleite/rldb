@@ -7,19 +7,19 @@ RLDB (Rusty Learning Dynamo Database) is an educational project that provides a 
 ## Features
 | Feature | Description | Status | Resources |
 | --- | --- | --- | --- |
-| InMemory Storage Engine | A simple in-memory storage engine | <code style="color : green"> Implemented </code> | [Designing Data-Intensive applications - chapter 3](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) | 
-| LSMTree | An LSMTree backed storage engine | <code style="color : yellow"> TODO </code> | [Designing Data-Intensive applications - chapter 3](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
-| Log Structured HashTable | Similar to the bitcask storage engine | <code style="color : yellow"> TODO </code> | [Bitcask intro paper](https://riak.com/assets/bitcask-intro.pdf) |
-| TCP server | A tokio backed TCP server for incoming requests | <code style="color : green"> Implemented </code> | [tokio](https://github.com/tokio-rs/tokio) |
-| PUT/GET/DEL client APIs | TCP APIs for PUT GET and DELET | <code style="color : greenyellow"> WIP </code> | N/A |
-| PartitioningScheme via Consistent Hashing | A functional consistent-hashing implementation | <code style="color : green"> Implemented </code> | [Designing Data-Intensive applications - chapter 6](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/), [Consistent Hashing by David Karger](https://cs.brown.edu/courses/csci2950-u/papers/chash99www.pdf) |
-| Leaderless replication of partitions | Replicating partition data using the leaderless replication approach | <code style="color : green"> Implemented </code> | [Designing Data-Intensive applications - chapter 5](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
-| Quorum | Quorum based reads and writes for tunnable consistenty guarantees | <code style="color : green"> Implemented </code> | [Designing Data-Intensive applications - chapter 5](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
-| Node discovery and failure detection| A gossip based mechanism to discover cluster nodes and detect failures | <code style="color : green"> Implemented </code> | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
-| re-sharding/rebalancing | Moving data between nodes after cluster state changes | <code style="color : yellow"> TODO </code> | [Designing Data-Intensive applications - chapter 6](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
-| Data versioning | Versioning and conflict detection / resolution (via VersionVectors) | <code style="color : greenyellow"> WIP </code> | [Vector clock wiki](https://en.wikipedia.org/wiki/Vector_clock), [Lamport clock paper](https://lamport.azurewebsites.net/pubs/time-clocks.pdf) (not that easy to parse)
-| Reconciliation via Read repair | GETs can trigger repair in case of missing replicas | <code style="color : yellow"> TODO </code> | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
-| Active anti-entropy | Use merkle trees to detect missing replicas and trigger reconciliation | <code style="color : yellow"> TODO </code> | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+| InMemory Storage Engine | A simple in-memory storage engine | $${\textsf{\color{green}Implemented}}$$ | [Designing Data-Intensive applications - chapter 3](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) | 
+| LSMTree | An LSMTree backed storage engine | $${\textsf{\color{yellow}TODO}}$$ | [Designing Data-Intensive applications - chapter 3](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
+| Log Structured HashTable | Similar to the bitcask storage engine | $${\textsf{\color{yellow}TODO}}$$ | [Bitcask intro paper](https://riak.com/assets/bitcask-intro.pdf) |
+| TCP server | A tokio backed TCP server for incoming requests | $${\textsf{\color{green}Implemented}}$$ | [tokio](https://github.com/tokio-rs/tokio) |
+| PUT/GET/DEL client APIs | TCP APIs for PUT GET and DELET | $${\textsf{\color{greenyellow}WIP}}$$ | N/A |
+| PartitioningScheme via Consistent Hashing | A functional consistent-hashing implementation | $${\textsf{\color{green}Implemented}}$$ | [Designing Data-Intensive applications - chapter 6](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/), [Consistent Hashing by David Karger](https://cs.brown.edu/courses/csci2950-u/papers/chash99www.pdf) |
+| Leaderless replication of partitions | Replicating partition data using the leaderless replication approach | $${\textsf{\color{green}Implemented}}$$ | [Designing Data-Intensive applications - chapter 5](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
+| Quorum | Quorum based reads and writes for tunnable consistenty guarantees | $${\textsf{\color{green}Implemented}}$$ | [Designing Data-Intensive applications - chapter 5](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
+| Node discovery and failure detection| A gossip based mechanism to discover cluster nodes and detect failures | $${\textsf{\color{green}Implemented}}$$ | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+| re-sharding/rebalancing | Moving data between nodes after cluster state changes | $${\textsf{\color{yellow}TODO}}$$ | [Designing Data-Intensive applications - chapter 6](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/) |
+| Data versioning | Versioning and conflict detection / resolution (via VersionVectors) | $${\textsf{\color{greenyellow}WIP}}$$ | [Vector clock wiki](https://en.wikipedia.org/wiki/Vector_clock), [Lamport clock paper](https://lamport.azurewebsites.net/pubs/time-clocks.pdf) (not that easy to parse)
+| Reconciliation via Read repair | GETs can trigger repair in case of missing replicas | $${\textsf{\color{yellow}TODO}}$$ | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+| Active anti-entropy | Use merkle trees to detect missing replicas and trigger reconciliation | $${\textsf{\color{yellow}TODO}}$$ | [Dynamo Paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
 
 ## Running the server
 
