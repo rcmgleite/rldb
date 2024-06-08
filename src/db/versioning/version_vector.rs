@@ -2,7 +2,11 @@
 //!
 //! Still not sure if these APIs are exactly what a version vector should provide..
 //! This is what I understood from the papares on VersionVector implementations
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::size_of};
+
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+use crate::cluster::error::{Error, Result};
 
 /// Type alias for a processId
 ///
@@ -24,7 +28,7 @@ pub enum VersionVectorOrd {
 }
 
 /// The [`VersionVector`] definition
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VersionVector {
     id: ProcessId,
     versions: HashMap<ProcessId, Version>,
@@ -100,10 +104,62 @@ impl VersionVector {
 
         *self = ret;
     }
+
+    /// Serializes the self into [`bytes::Bytes`].
+    ///
+    /// Format: |n_entries (u32)|[pid (u128)][version (u128)][pid][version]....
+    pub fn serialize(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+        buf.put_u32(self.versions.len() as u32);
+        for (k, v) in self.versions.iter() {
+            buf.put_u128(*k);
+            buf.put_u128(*v);
+        }
+
+        buf.freeze()
+    }
+
+    /// Deserializes [bytes::Bytes] into [`VersionVector`]
+    pub fn deserialize(self_id: ProcessId, mut serialized_vv: Bytes) -> Result<Self> {
+        let min_size = size_of::<u32>();
+        if serialized_vv.len() < min_size {
+            return Err(Error::Internal {
+                reason: format!(
+                    "buffer provided to deserialize into VersionVector is too small. Expected size of at least {}, got {}",  min_size, serialized_vv.len()
+                ),
+            });
+        }
+
+        let n_items = serialized_vv.get_u32() as usize;
+        let expected_size = n_items * 2 * size_of::<u128>();
+        if serialized_vv.len() != expected_size {
+            return Err(Error::Internal {
+                reason: format!(
+                    "buffer provided to deserialize into VersionVector has the wrong size. Expected {}, got {}",  expected_size, serialized_vv.len()
+                ),
+            });
+        }
+
+        let mut versions = HashMap::with_capacity(n_items);
+        for _ in 0..n_items {
+            let pid = serialized_vv.get_u128();
+            let version = serialized_vv.get_u128();
+            versions.insert(pid, version);
+        }
+
+        Ok(Self {
+            id: self_id,
+            versions,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+
+    use bytes::{BufMut, Bytes, BytesMut};
+
     use crate::db::versioning::version_vector::VersionVectorOrd;
 
     use super::{ProcessId, Version, VersionVector};
@@ -232,5 +288,50 @@ mod tests {
                 .into_iter()
                 .collect()
         );
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        let mut vv = VersionVector::new(0);
+        vv.versions = vec![(0, 10), (1, 20), (4, 2), (5, 1), (10, 100)]
+            .into_iter()
+            .collect();
+
+        let serialized = vv.serialize();
+        assert_eq!(
+            serialized.len(),
+            size_of::<u32>() + (vv.versions.len() * 2 * size_of::<u128>())
+        );
+
+        let deserialized = VersionVector::deserialize(vv.id, serialized).unwrap();
+        assert_eq!(vv, deserialized);
+    }
+
+    #[test]
+    fn test_fail_to_deserialize_buffer_too_small() {
+        let err = VersionVector::deserialize(0, Bytes::from("a"))
+            .err()
+            .unwrap();
+
+        match err {
+            crate::cluster::error::Error::Internal { .. } => {}
+            _ => {
+                panic!("Unexpected err: {}", err)
+            }
+        }
+    }
+
+    #[test]
+    fn test_fail_to_deserialize_buffer_size_mismatch() {
+        let mut buf = BytesMut::new();
+        buf.put_u32(10);
+        let err = VersionVector::deserialize(0, buf.freeze()).err().unwrap();
+
+        match err {
+            crate::cluster::error::Error::Internal { .. } => {}
+            _ => {
+                panic!("Unexpected err: {}", err)
+            }
+        }
     }
 }
