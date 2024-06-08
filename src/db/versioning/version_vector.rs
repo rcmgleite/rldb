@@ -6,17 +6,17 @@ use std::{collections::HashMap, mem::size_of};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::cluster::error::{Error, Result};
+use crate::error::{Error, Result};
 
 /// Type alias for a processId
 ///
 /// A ProcessId is an identifier of the owner of a mutation that needs to be tracked by a [`VersionVector`].
 /// In rldb this will be a rldb node that received a PUT or DELETE request.
-type ProcessId = u128;
+pub type ProcessId = u128;
 /// Type alias for Version
 ///
 /// Currently using u128 but that's absolutely too much.. might be able to find better representations for this later..
-type Version = u128;
+pub type Version = u128;
 
 /// Enum used to determine the causality between [`VersionVector`] instances
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,9 +58,9 @@ impl VersionVector {
         let mut process_ids: Vec<&u128> = lhs.versions.keys().chain(rhs.versions.keys()).collect();
         process_ids.sort();
         process_ids.dedup();
-        let mut process_ids = process_ids.into_iter();
+        let process_ids = process_ids.into_iter();
 
-        while let Some(pid) = process_ids.next() {
+        for pid in process_ids {
             let lhs_version = lhs.versions.get(pid).unwrap_or(&0);
             let rhs_version = rhs.versions.get(pid).unwrap_or(&0);
 
@@ -69,7 +69,7 @@ impl VersionVector {
     }
 
     /// Compares 2 instances of [`VersionVector`]s and determines it's causality
-    pub fn cmp(&self, rhs: &VersionVector) -> VersionVectorOrd {
+    pub fn causality(&self, rhs: &VersionVector) -> VersionVectorOrd {
         let mut happened_before = false;
         let mut happened_after = false;
         Self::for_every_process_id_and_version(self, rhs, |_, lhs_version, rhs_version| {
@@ -123,21 +123,15 @@ impl VersionVector {
     pub fn deserialize(self_id: ProcessId, mut serialized_vv: Bytes) -> Result<Self> {
         let min_size = size_of::<u32>();
         if serialized_vv.len() < min_size {
-            return Err(Error::Internal {
-                reason: format!(
-                    "buffer provided to deserialize into VersionVector is too small. Expected size of at least {}, got {}",  min_size, serialized_vv.len()
-                ),
-            });
+            return Err(Error::Internal(crate::error::Internal::Unknown { reason: format!(
+                    "buffer provided to deserialize into VersionVector is too small. Expected size of at least {}, got {}",  min_size, serialized_vv.len())}));
         }
 
         let n_items = serialized_vv.get_u32() as usize;
         let expected_size = n_items * 2 * size_of::<u128>();
         if serialized_vv.len() != expected_size {
-            return Err(Error::Internal {
-                reason: format!(
-                    "buffer provided to deserialize into VersionVector has the wrong size. Expected {}, got {}",  expected_size, serialized_vv.len()
-                ),
-            });
+            return Err(Error::Internal(crate::error::Internal::Unknown { reason: format!(
+                    "buffer provided to deserialize into VersionVector has the wrong size. Expected {}, got {}",  expected_size, serialized_vv.len())}));
         }
 
         let mut versions = HashMap::with_capacity(n_items);
@@ -160,7 +154,7 @@ mod tests {
 
     use bytes::{BufMut, Bytes, BytesMut};
 
-    use crate::db::versioning::version_vector::VersionVectorOrd;
+    use crate::{db::versioning::version_vector::VersionVectorOrd, error::Internal};
 
     use super::{ProcessId, Version, VersionVector};
 
@@ -175,65 +169,65 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct CmdTableTestEntry {
+    struct CausalityTableTestEntry {
         lhs_versions: Vec<(ProcessId, Version)>,
         rhs_versions: Vec<(ProcessId, Version)>,
-        order: VersionVectorOrd,
+        expected_order: VersionVectorOrd,
     }
 
     // generates multiple cases that we know the answer to for the cmp function
-    fn generate_cmd_table_test() -> Vec<CmdTableTestEntry> {
+    fn generate_cmd_table_test() -> Vec<CausalityTableTestEntry> {
         vec![
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![],
                 rhs_versions: vec![],
-                order: VersionVectorOrd::Equals,
+                expected_order: VersionVectorOrd::Equals,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(0, 1)],
                 rhs_versions: vec![],
-                order: VersionVectorOrd::HappenedAfter,
+                expected_order: VersionVectorOrd::HappenedAfter,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![],
                 rhs_versions: vec![(0, 1)],
-                order: VersionVectorOrd::HappenedBefore,
+                expected_order: VersionVectorOrd::HappenedBefore,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(0, 1)],
                 rhs_versions: vec![(1, 1)],
-                order: VersionVectorOrd::HappenedConcurrently,
+                expected_order: VersionVectorOrd::HappenedConcurrently,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(0, 0), (1, 1), (2, 1), (3, 1), (4, 1)],
                 rhs_versions: vec![(1, 1), (2, 1), (3, 1), (4, 1)],
-                order: VersionVectorOrd::Equals,
+                expected_order: VersionVectorOrd::Equals,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(0, 1)],
                 rhs_versions: vec![(0, 1), (1, 1)],
-                order: VersionVectorOrd::HappenedBefore,
+                expected_order: VersionVectorOrd::HappenedBefore,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(0, 0), (1, 1), (3, 1), (4, 1)],
                 rhs_versions: vec![(1, 1), (2, 1), (3, 1), (4, 1)],
-                order: VersionVectorOrd::HappenedBefore,
+                expected_order: VersionVectorOrd::HappenedBefore,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(1, 4), (2, 5), (3, 2), (4, 5)],
                 rhs_versions: vec![(1, 4), (2, 5), (3, 2), (4, 4)],
-                order: VersionVectorOrd::HappenedAfter,
+                expected_order: VersionVectorOrd::HappenedAfter,
             },
-            CmdTableTestEntry {
+            CausalityTableTestEntry {
                 lhs_versions: vec![(1, 4), (2, 5), (3, 2), (4, 5)],
                 rhs_versions: vec![(1, 4), (2, 5), (3, 3), (4, 4)],
-                order: VersionVectorOrd::HappenedConcurrently,
+                expected_order: VersionVectorOrd::HappenedConcurrently,
             },
         ]
     }
 
     #[test]
-    fn test_version_vector_cmd_table_test() {
+    fn test_version_vector_causality_table_test() {
         let tests = generate_cmd_table_test();
         for test in tests {
             let mut lhs = VersionVector::new(0);
@@ -246,12 +240,12 @@ mod tests {
                 *rhs.versions.entry(version.0).or_insert(0) = version.1;
             }
 
-            if lhs.cmp(&rhs) != test.order {
+            if lhs.causality(&rhs) != test.expected_order {
                 panic!(
                     "Failed for test {:?}\nExpected: {:?}, got: {:?}",
                     test,
-                    test.order,
-                    lhs.cmp(&rhs)
+                    test.expected_order,
+                    lhs.causality(&rhs)
                 );
             }
         }
@@ -314,7 +308,7 @@ mod tests {
             .unwrap();
 
         match err {
-            crate::cluster::error::Error::Internal { .. } => {}
+            crate::error::Error::Internal(Internal::Unknown { .. }) => {}
             _ => {
                 panic!("Unexpected err: {}", err)
             }
@@ -328,7 +322,7 @@ mod tests {
         let err = VersionVector::deserialize(0, buf.freeze()).err().unwrap();
 
         match err {
-            crate::cluster::error::Error::Internal { .. } => {}
+            crate::error::Error::Internal(Internal::Unknown { .. }) => {}
             _ => {
                 panic!("Unexpected err: {}", err)
             }
