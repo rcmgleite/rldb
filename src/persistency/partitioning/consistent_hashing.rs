@@ -1,5 +1,5 @@
 //! Consistent-hashing is the default [`PartitioningScheme`] for rldb
-use crate::cluster::error::{Error, Result};
+use crate::error::{Error, Internal, Result};
 use bytes::Bytes;
 use murmur3::murmur3_x86_128;
 use std::{collections::HashSet, io::Cursor};
@@ -68,7 +68,7 @@ impl PartitioningScheme for ConsistentHashing {
     fn add_node(&mut self, node: Bytes) -> Result<()> {
         let node_hash = (self.hash_fn)(&node);
         match self.hashes.binary_search(&node_hash) {
-            Ok(_) => Err(Error::Internal { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() }),
+            Ok(_) => Err(Error::Internal(Internal::Logic { reason: "ConsistentHashing found a collision on its hash algorithm. This is currently an un-recoverable issue...".to_string() })),
             Err(index) => {
                 self.hashes.insert(index, node_hash);
                 self.nodes.insert(index, node);
@@ -135,7 +135,7 @@ pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
 #[cfg(test)]
 mod tests {
     use super::ConsistentHashing;
-    use crate::cluster::partitioning::{
+    use crate::persistency::partitioning::{
         consistent_hashing::{murmur3_hash, HashFunctionReturnType},
         PartitioningScheme,
     };

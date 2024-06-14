@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::{cluster::state::Node, db::Db, error::Result, server::message::IntoMessage};
+use crate::{cluster::state::Node, error::Result, persistency::Db, server::message::IntoMessage};
 
 pub const CMD_CLUSTER_CLUSTER_STATE: u32 = 102;
 

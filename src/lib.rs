@@ -4,8 +4,8 @@
 pub mod client;
 pub mod cluster;
 pub mod cmd;
-pub mod db;
 pub mod error;
+pub mod persistency;
 pub mod server;
 pub mod storage_engine;
 pub mod test_utils;

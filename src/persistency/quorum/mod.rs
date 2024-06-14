@@ -1,7 +1,7 @@
 //! Module that contain quorum algorithm implementations
 
 pub mod min_required_replicas;
-use crate::cluster::error::Result;
+use crate::error::Result;
 
 /// The result of a [`Quorum::finish`] call.
 ///

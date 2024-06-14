@@ -8,7 +8,7 @@
 //! Note that the number of calls to [`Quorum::update`] is bound by the [`MinRequiredReplicas::new`] n_replicas argument.
 //! If you call update more than n_replicas times an error will be returned.
 use super::{Evaluation, OperationStatus, Quorum, QuorumResult};
-use crate::cluster::error::{Error, Result};
+use crate::error::{Error, Result};
 use std::hash::Hash;
 
 /// Definition of a MinRequiredReplicas [`Quorum`] type
@@ -97,8 +97,8 @@ impl<T: Eq + Hash, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T,
 #[cfg(test)]
 mod tests {
     use crate::{
-        cluster::quorum::{Evaluation, OperationStatus, Quorum},
         error::Error,
+        persistency::quorum::{Evaluation, OperationStatus, Quorum},
     };
 
     use super::MinRequiredReplicas;
@@ -167,7 +167,7 @@ mod tests {
     fn test_failed_to_construct() {
         let err = MinRequiredReplicas::<(), Error>::new(2, 3).err().unwrap();
         match err {
-            crate::cluster::error::Error::Logic { .. } => { /* noop */ }
+            crate::error::Error::Logic { .. } => { /* noop */ }
             _ => {
                 panic!("Unexpected err {}", err);
             }
@@ -192,7 +192,7 @@ mod tests {
 
         let err = q.update(OperationStatus::Success(())).err().unwrap();
         match err {
-            crate::cluster::error::Error::Logic { .. } => { /* noop */ }
+            crate::error::Error::Logic { .. } => { /* noop */ }
             _ => {
                 panic!("Unexpected err {}", err);
             }

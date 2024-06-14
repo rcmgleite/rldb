@@ -33,6 +33,11 @@ pub enum Error {
         operation: String,
         reason: String,
     },
+    Logic {
+        reason: String,
+    },
+    Client(crate::client::error::Error),
+    SingleNodeCluster,
 }
 
 impl Error {
@@ -64,31 +69,11 @@ impl From<crate::storage_engine::Error> for Error {
     }
 }
 
-impl From<crate::cluster::error::Error> for Error {
-    fn from(err: crate::cluster::error::Error) -> Self {
-        Self::Internal(Internal::Cluster(err))
-    }
-}
-
 impl From<crate::client::error::Error> for Error {
     fn from(err: crate::client::error::Error) -> Self {
         match err {
-            crate::client::error::Error::UnableToConnect { reason } => Self::Io { reason },
-            crate::client::error::Error::InvalidRequest { reason } => {
-                Self::InvalidRequest { reason }
-            }
-            crate::client::error::Error::InvalidServerResponse { reason } => {
-                Self::Internal(Internal::Unknown { reason })
-            }
-            crate::client::error::Error::QuorumNotReached { operation, reason } => {
-                Self::QuorumNotReached { operation, reason }
-            }
             crate::client::error::Error::NotFound { key } => Self::NotFound { key },
-            crate::client::error::Error::Io { reason } => Self::Io { reason },
-            crate::client::error::Error::Generic { reason } => Self::Generic { reason },
-            crate::client::error::Error::Logic { reason } => {
-                Self::Internal(Internal::Unknown { reason })
-            }
+            _ => Self::Client(err),
         }
     }
 }
@@ -98,5 +83,4 @@ pub enum Internal {
     Logic { reason: String },
     Unknown { reason: String },
     StorageEngine(crate::storage_engine::Error),
-    Cluster(crate::cluster::error::Error),
 }

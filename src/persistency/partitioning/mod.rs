@@ -1,5 +1,5 @@
 //! Module that contains different partitioning schemes
-use crate::cluster::error::Result;
+use crate::error::Result;
 use bytes::Bytes;
 
 pub mod consistent_hashing;

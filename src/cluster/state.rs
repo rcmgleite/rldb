@@ -9,19 +9,15 @@
 //!
 //! Currently, the state is updated via a gossip protocol in which nodes exchange their view of the cluster
 //! to every other host. For more info, see the docs for [`super::heartbeat`].
+use crate::error::{Error, Result};
+use crate::persistency::partitioning::PartitioningScheme;
+use crate::utils::serde_utf8_bytes;
 use bytes::Bytes;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard},
-};
-
-use crate::utils::serde_utf8_bytes;
-
-use super::{
-    error::{Error, Result},
-    partitioning::PartitioningScheme,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -219,7 +215,7 @@ impl State {
         let guard = self.acquire_lock()?;
         let keys: Vec<&Bytes> = guard.nodes.keys().collect();
         let rnd = if keys.len() == 1 {
-            return Err(Error::ClusterHasOnlySelf);
+            return Err(Error::SingleNodeCluster);
         } else {
             rand::thread_rng().gen_range(0..keys.len())
         };

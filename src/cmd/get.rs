@@ -10,10 +10,11 @@ use tracing::{event, Level};
 
 use crate::client::db_client::DbClient;
 use crate::client::Client;
-use crate::cluster::quorum::min_required_replicas::MinRequiredReplicas;
-use crate::cluster::quorum::{Evaluation, OperationStatus, Quorum};
-use crate::db::{Db, OwnsKeyResponse};
 use crate::error::{Error, Result};
+use crate::persistency::quorum::{
+    min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum,
+};
+use crate::persistency::{Db, OwnsKeyResponse};
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
@@ -92,7 +93,11 @@ impl Get {
                 match quorum_result.evaluation {
                     Evaluation::Reached => Ok(quorum_result.successes[0].clone()),
                     Evaluation::NotReached | Evaluation::Unreachable => {
-                        if quorum_result.failures.iter().all(|err| err.is_not_found()) {
+                        if quorum_result.failures.iter().all(|err| {
+                            let is_not_found = err.is_not_found();
+                            println!("DEBUG: {} {}", err, is_not_found);
+                            is_not_found
+                        }) {
                             return Err(Error::NotFound { key: self.key });
                         }
 

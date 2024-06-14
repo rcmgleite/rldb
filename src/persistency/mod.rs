@@ -1,13 +1,15 @@
-//! Module that contains the abstraction connecting the [`StorageEngine`] and [`State`] into a single interface.
+//! Module that contains the abstraction connecting the [`StorageEngine`] and [`ClusterState`] into a single interface.
 //!
 //! This interface is what a [`crate::cmd::Command`] has access to in order to execute its functionality.
 use bytes::Bytes;
 use std::sync::Arc;
 
+pub mod partitioning;
+pub mod quorum;
 pub mod versioning;
 
 use crate::{
-    cluster::state::{Node, State},
+    cluster::state::{Node as ClusterNode, State as ClusterState},
     error::{Error, Result},
     server::config::Quorum,
 };
@@ -17,7 +19,7 @@ pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + S
 
 /// Db is the abstraction that connects storage_engine and overall database state
 /// in a single interface.
-/// It exists mainly to hide [`StorageEngine`] and [`State`] details so that they can
+/// It exists mainly to hide [`StorageEngine`] and [`ClusterState`] details so that they can
 /// be updated later on..
 #[derive(Debug)]
 pub struct Db {
@@ -25,7 +27,7 @@ pub struct Db {
     storage_engine: StorageEngine,
     /// Cluster state.
     /// This will be present if this is configured as a cluster node
-    cluster_state: Option<Arc<State>>,
+    cluster_state: Option<Arc<ClusterState>>,
     /// Quorum configuration
     /// TODO: Should this really be here?
     quorum: Option<Quorum>,
@@ -42,10 +44,10 @@ pub enum OwnsKeyResponse {
 }
 
 impl Db {
-    /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`State`].
+    /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
     pub fn new(
         storage_engine: StorageEngine,
-        cluster_state: Option<Arc<State>>,
+        cluster_state: Option<Arc<ClusterState>>,
         quorum: Option<Quorum>,
     ) -> Self {
         Self {
@@ -88,7 +90,7 @@ impl Db {
     /// Updates the cluster state based on the nodes provided.
     ///
     /// This is used as part of the Gossip protocol to propagate cluster changes across all nodes
-    pub fn update_cluster_state(&self, nodes: Vec<Node>) -> Result<()> {
+    pub fn update_cluster_state(&self, nodes: Vec<ClusterNode>) -> Result<()> {
         if let Some(cluster_state) = self.cluster_state.as_ref() {
             Ok(cluster_state.merge_nodes(nodes)?)
         } else {
@@ -114,7 +116,7 @@ impl Db {
         }
     }
 
-    pub fn cluster_state(&self) -> Result<Vec<Node>> {
+    pub fn cluster_state(&self) -> Result<Vec<ClusterNode>> {
         if let Some(cluster_state) = self.cluster_state.as_ref() {
             Ok(cluster_state.get_nodes()?)
         } else {

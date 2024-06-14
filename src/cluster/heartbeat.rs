@@ -18,13 +18,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     client::{db_client::DbClientFactory, Client, Factory as ClientFactory},
-    cluster::error::Error,
+    error::{Error, Result},
 };
 
-use super::{
-    error::Result,
-    state::{Node, State},
-};
+use super::state::{Node, State};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
@@ -57,7 +54,7 @@ pub async fn start_heartbeat(cluster_state: Arc<State>) {
         .await
         {
             match err {
-                Error::ClusterHasOnlySelf => {
+                Error::SingleNodeCluster => {
                     event!(Level::DEBUG, "Skipping heartbeat to self");
                 }
                 _ => {
@@ -87,7 +84,7 @@ async fn do_heartbeat(
     let target_node = match cluster_state.get_random_node() {
         Ok(target_node) => target_node,
         Err(err) => {
-            if let Error::ClusterHasOnlySelf = err {
+            if let Error::SingleNodeCluster = err {
                 event!(Level::DEBUG, "skipping heatbeat to self");
                 return Ok(HeartbeatResult::Skipped);
             }
@@ -152,9 +149,9 @@ mod tests {
         client::{error::Error, mock::MockClientFactoryBuilder},
         cluster::{
             heartbeat::{do_heartbeat, HeartbeatResult},
-            partitioning::mock::MockPartitioningScheme,
             state::{Node, NodeStatus, State},
         },
+        persistency::partitioning::mock::MockPartitioningScheme,
         test_utils::fault::When,
     };
     use bytes::Bytes;
@@ -295,7 +292,7 @@ mod tests {
         .unwrap();
 
         match err {
-            crate::cluster::error::Error::Client(Error::UnableToConnect { .. }) => {}
+            crate::error::Error::Client(Error::UnableToConnect { .. }) => {}
             _ => {
                 panic!("Unexpected error: {}", err)
             }
@@ -357,7 +354,7 @@ mod tests {
         .unwrap();
 
         match err {
-            crate::cluster::error::Error::Client(Error::Io { .. }) => {}
+            crate::error::Error::Client(Error::Io { .. }) => {}
             _ => {
                 panic!("Unexpected error: {}", err)
             }

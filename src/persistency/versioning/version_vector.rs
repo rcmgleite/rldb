@@ -107,7 +107,8 @@ impl VersionVector {
 
     /// Serializes the self into [`bytes::Bytes`].
     ///
-    /// Format: |n_entries (u32)|[pid (u128)][version (u128)][pid][version]....
+    /// Format: |  u32  | u128 |   u128  | u128 |   u128  | ...
+    ///         |n_items|  pid | version |  pid | version | ...
     pub fn serialize(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_u32(self.versions.len() as u32);
@@ -154,7 +155,7 @@ mod tests {
 
     use bytes::{BufMut, Bytes, BytesMut};
 
-    use crate::{db::versioning::version_vector::VersionVectorOrd, error::Internal};
+    use crate::{error::Internal, persistency::versioning::version_vector::VersionVectorOrd};
 
     use super::{ProcessId, Version, VersionVector};
 

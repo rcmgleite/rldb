@@ -1,4 +1,10 @@
 //! Module that contains all commands implemented by rldb.
+//!
+//! Commands have 2 responsibilities:
+//!  1. Parse request params (basically serde_json calls)
+//!  2. Construct responses that are sent back to callers
+//!
+//! Everything else should be delegated to the [`crate::persistency`] layer or other modules.
 pub mod cluster;
 pub mod get;
 pub mod ping;
@@ -21,8 +27,8 @@ use crate::{
         cluster::heartbeat::CMD_CLUSTER_HEARTBEAT, cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER,
         get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
-    db::Db,
     error::{Error, Result},
+    persistency::Db,
     server::message::Message,
 };
 

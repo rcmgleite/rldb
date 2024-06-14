@@ -10,11 +10,11 @@
 //!  2. The Request protocol
 //!    - currently a simple header (cmd,length) and a json encoded payload
 use crate::cluster::heartbeat::start_heartbeat;
-use crate::cluster::partitioning::consistent_hashing::ConsistentHashing;
 use crate::cluster::state::State;
 use crate::cmd::Command;
-use crate::db::Db;
 use crate::error::{Error, Result};
+use crate::persistency::partitioning::consistent_hashing::ConsistentHashing;
+use crate::persistency::Db;
 use crate::storage_engine::in_memory::InMemory;
 use bytes::Bytes;
 use futures::Future;
