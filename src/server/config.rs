@@ -50,6 +50,16 @@ pub struct Quorum {
     pub writes: usize,
 }
 
+impl Default for Quorum {
+    fn default() -> Self {
+        Self {
+            replicas: 3,
+            reads: 2,
+            writes: 2,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PartitioningScheme {

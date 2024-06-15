@@ -69,7 +69,7 @@ impl Server {
 
                 Ok(Self {
                     client_listener: listener,
-                    db: Arc::new(Db::new(storage_engine, None, None)),
+                    db: Arc::new(Db::new(storage_engine, None)),
                 })
             }
 
@@ -91,6 +91,7 @@ impl Server {
                     config::PartitioningScheme::ConsistentHashing => Arc::new(State::new(
                         Box::<ConsistentHashing>::default(),
                         client_listener.local_addr().unwrap().to_string().into(),
+                        quorum,
                     )?),
                 };
 
@@ -100,11 +101,7 @@ impl Server {
 
                 Ok(Self {
                     client_listener,
-                    db: Arc::new(Db::new(
-                        storage_engine,
-                        Some(partitioning_scheme),
-                        Some(quorum),
-                    )),
+                    db: Arc::new(Db::new(storage_engine, Some(partitioning_scheme))),
                 })
             }
         }

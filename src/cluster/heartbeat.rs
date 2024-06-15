@@ -152,6 +152,7 @@ mod tests {
             state::{Node, NodeStatus, State},
         },
         persistency::partitioning::mock::MockPartitioningScheme,
+        server::config::Quorum,
         test_utils::fault::When,
     };
     use bytes::Bytes;
@@ -168,6 +169,7 @@ mod tests {
             State::new(
                 Box::new(MockPartitioningScheme::default()),
                 own_addr.clone(),
+                Quorum::default(),
             )
             .unwrap(),
         );
@@ -227,6 +229,7 @@ mod tests {
             State::new(
                 Box::new(MockPartitioningScheme::default()),
                 own_addr.clone(),
+                Quorum::default(),
             )
             .unwrap(),
         );
@@ -263,6 +266,7 @@ mod tests {
             State::new(
                 Box::new(MockPartitioningScheme::default()),
                 own_addr.clone(),
+                Quorum::default(),
             )
             .unwrap(),
         );
@@ -324,6 +328,7 @@ mod tests {
             State::new(
                 Box::new(MockPartitioningScheme::default()),
                 own_addr.clone(),
+                Quorum::default(),
             )
             .unwrap(),
         );

@@ -15,7 +15,6 @@ use crate::{
     client::{db_client::DbClient, Client},
     cluster::state::{Node as ClusterNode, State as ClusterState},
     error::{Error, Result},
-    server::config::Quorum as QuorumConfig,
 };
 
 /// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
@@ -50,19 +49,8 @@ enum State {
     },
 }
 
-impl State {
-    fn quorum(&self) -> Option<QuorumConfig> {
-        match self {
-            State::Active { shared } => shared.quorum.clone(),
-            Self::Synchronizing { shared, .. } => shared.quorum.clone(),
-        }
-    }
-}
-
 #[derive(Debug)]
-struct Shared {
-    quorum: Option<QuorumConfig>,
-}
+struct Shared;
 
 /// Possibly a bad idea, but using an enum instead of a boolean to determine if a key is owned by a node or not.
 /// This is mostly useful because the [`OwnsKeyResponse::False`] variant contains the addrs of the node
@@ -76,16 +64,12 @@ pub enum OwnsKeyResponse {
 
 impl Db {
     /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
-    pub fn new(
-        storage_engine: StorageEngine,
-        cluster_state: Option<Arc<ClusterState>>,
-        quorum: Option<QuorumConfig>,
-    ) -> Self {
+    pub fn new(storage_engine: StorageEngine, cluster_state: Option<Arc<ClusterState>>) -> Self {
         Self {
             storage_engine,
             cluster_state,
             own_state: State::Active {
-                shared: Arc::new(Shared { quorum: quorum }),
+                shared: Arc::new(Shared),
             },
         }
     }
@@ -95,15 +79,16 @@ impl Db {
     /// TODO: Should the checks regarding ownership of keys/partitions be moved to this function
     /// instead of delegated to the Put [`crate::cmd::Command`]
     pub async fn put(&self, key: Bytes, value: Bytes, replication: bool) -> Result<()> {
-        if replication {
-            event!(Level::DEBUG, "Executing a replication Put");
-            // if this is a replication PUT, we don't have to deal with quorum
-            self.storage_engine.put(key, value).await?;
-        } else {
-            event!(Level::DEBUG, "Executing a coordinator Put");
-            // if this is not a replication PUT, we have to honor quorum before returning a success
-            // if we have a quorum config, we have to make sure we wrote to enough replicas
-            if let Some(quorum_config) = self.quorum_config() {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            if replication {
+                event!(Level::DEBUG, "Executing a replication Put");
+                // if this is a replication PUT, we don't have to deal with quorum
+                self.storage_engine.put(key, value).await?;
+            } else {
+                event!(Level::DEBUG, "Executing a coordinator Put");
+                // if this is not a replication PUT, we have to honor quorum before returning a success
+                // if we have a quorum config, we have to make sure we wrote to enough replicas
+                let quorum_config = cluster_state.quorum_config();
                 let mut quorum =
                     MinRequiredReplicas::new(quorum_config.replicas, quorum_config.writes)?;
                 let mut futures = FuturesUnordered::new();
@@ -152,9 +137,10 @@ impl Db {
                         });
                     }
                 }
-            } else {
-                self.storage_engine.put(key, value).await?;
             }
+        } else {
+            event!(Level::DEBUG, "Executing non-cluster PUT");
+            self.storage_engine.put(key, value).await?;
         }
 
         Ok(())
@@ -200,12 +186,14 @@ impl Db {
     ///
     /// If the key is not found, [Option::None] is returned
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<Bytes>> {
-        if replica {
-            event!(Level::INFO, "executing a replica GET");
-            Ok(self.storage_engine.get(&key).await?)
-        } else {
-            event!(Level::INFO, "executing a non-replica GET");
-            if let Some(quorum_config) = self.quorum_config() {
+        if let Some(cluster_state) = self.cluster_state.as_ref() {
+            event!(Level::DEBUG, "Executing cluster GET");
+            if replica {
+                event!(Level::DEBUG, "Executing a replica GET");
+                Ok(self.storage_engine.get(&key).await?)
+            } else {
+                event!(Level::INFO, "executing a non-replica GET");
+                let quorum_config = cluster_state.quorum_config();
                 let mut quorum =
                     MinRequiredReplicas::new(quorum_config.replicas, quorum_config.reads)?;
 
@@ -259,9 +247,10 @@ impl Db {
                         })
                     }
                 }
-            } else {
-                Ok(self.storage_engine.get(&key).await?)
             }
+        } else {
+            event!(Level::INFO, "executing a non-cluster GET");
+            Ok(self.storage_engine.get(&key).await?)
         }
     }
 
@@ -325,16 +314,9 @@ impl Db {
         }
     }
 
-    /// returns the quorum config
-    pub fn quorum_config(&self) -> Option<QuorumConfig> {
-        self.own_state.quorum()
-    }
-
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
         if let Some(cluster_state) = self.cluster_state.as_ref() {
-            // TODO: remove unwrap()
-            Ok(cluster_state
-                .preference_list(key, self.own_state.quorum().as_ref().unwrap().replicas)?)
+            Ok(cluster_state.preference_list(key, cluster_state.quorum_config().replicas)?)
         } else {
             // TODO: There must be a way to make sure a caller is not allowed to call methods that only make sense
             // in cluster mode instead of a runtime failure.

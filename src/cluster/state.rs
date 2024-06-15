@@ -11,6 +11,7 @@
 //! to every other host. For more info, see the docs for [`super::heartbeat`].
 use crate::error::{Error, Result};
 use crate::persistency::partitioning::PartitioningScheme;
+use crate::server::config::Quorum;
 use crate::utils::serde_utf8_bytes;
 use bytes::Bytes;
 use rand::Rng;
@@ -57,6 +58,7 @@ impl Node {
 #[derive(Clone)]
 pub struct State {
     own_addr: Bytes,
+    quorum_config: Quorum,
     inner: Arc<Mutex<StateInner>>,
 }
 
@@ -92,6 +94,7 @@ impl State {
     pub fn new(
         mut partitioning_scheme: Box<dyn PartitioningScheme + Send>,
         own_addr: Bytes,
+        quorum_config: Quorum,
     ) -> Result<Self> {
         partitioning_scheme.add_node(own_addr.clone())?;
         let mut nodes = HashMap::new();
@@ -106,6 +109,7 @@ impl State {
 
         Ok(Self {
             own_addr,
+            quorum_config,
             inner: Arc::new(Mutex::new(StateInner {
                 nodes,
                 partitioning_scheme,
@@ -232,6 +236,10 @@ impl State {
 
     pub fn own_addr(&self) -> Bytes {
         self.own_addr.clone()
+    }
+
+    pub fn quorum_config(&self) -> Quorum {
+        self.quorum_config.clone()
     }
 
     pub fn owns_key(&self, key: &[u8]) -> Result<bool> {
