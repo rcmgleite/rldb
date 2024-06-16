@@ -27,6 +27,7 @@ enum Commands {
         key: Bytes,
     },
     #[command()]
+    // FIXME: Allow metadata to be passed as optional
     Put {
         #[arg(short)]
         port: u16,
@@ -72,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Put { port, key, value } => {
             let mut client = DbClient::new(format!("127.0.0.1:{}", port));
             client.connect().await?;
-            let response = client.put(key, value, false).await?;
+            let response = client.put(key, value, None, false).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;

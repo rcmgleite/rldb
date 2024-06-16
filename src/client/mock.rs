@@ -75,7 +75,13 @@ impl Client for MockClient {
     async fn get(&mut self, _key: Bytes, _replica: bool) -> Result<GetResponse> {
         todo!()
     }
-    async fn put(&mut self, _key: Bytes, _value: Bytes, _replication: bool) -> Result<PutResponse> {
+    async fn put(
+        &mut self,
+        _key: Bytes,
+        _value: Bytes,
+        _metadata: Option<String>,
+        _replication: bool,
+    ) -> Result<PutResponse> {
         todo!()
     }
     async fn heartbeat(&mut self, _: Vec<Node>) -> Result<HeartbeatResponse> {

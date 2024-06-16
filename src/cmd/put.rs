@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::persistency::Db;
 use crate::server::message::IntoMessage;
-use crate::utils::serde_utf8_bytes;
+use crate::utils::{serde_hex_bytes, serde_utf8_bytes};
 
 pub const PUT_CMD: u32 = 3;
 
@@ -19,30 +19,36 @@ pub struct Put {
     #[serde(with = "serde_utf8_bytes")]
     value: Bytes,
     replication: bool,
+    #[serde(with = "serde_hex_bytes")]
+    metadata: Option<Bytes>,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
-    pub fn new(key: Bytes, value: Bytes) -> Self {
-        Self {
-            key,
-            value,
-            replication: false,
-        }
+    pub fn new(key: Bytes, value: Bytes, metadata: Option<String>) -> Self {
+        Self::new_private(key, value, metadata, false)
     }
 
     /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
-    pub fn new_replication(key: Bytes, value: Bytes) -> Self {
+    pub fn new_replication(key: Bytes, value: Bytes, metadata: Option<String>) -> Self {
+        Self::new_private(key, value, metadata, true)
+    }
+
+    fn new_private(key: Bytes, value: Bytes, metadata: Option<String>, replication: bool) -> Self {
+        let metadata: Option<Bytes> = metadata.map(|m| hex::decode(m).unwrap().into());
+
         Self {
             key,
             value,
-            replication: true,
+            replication,
+            metadata,
         }
     }
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
-        db.put(self.key, self.value, self.replication).await?;
+        db.put(self.key, self.value, self.replication, self.metadata)
+            .await?;
         Ok(PutResponse {
             message: "Ok".to_string(),
         })

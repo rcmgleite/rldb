@@ -1,11 +1,13 @@
 //! Module that contains the abstraction connecting the [`StorageEngine`] and [`ClusterState`] into a single interface.
 //!
 //! This interface is what a [`crate::cmd::Command`] has access to in order to execute its functionality.
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
+use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
 use std::sync::Arc;
 use tracing::{event, Level};
+use versioning::version_vector::{ProcessId, VersionVector};
 
 pub mod partitioning;
 pub mod quorum;
@@ -43,14 +45,38 @@ enum State {
     /// Node is synchronizing from another host.
     /// This happens when a node either was just added to the cluster
     /// or was offline and is now catching up for any reason
+    #[allow(dead_code)]
     Synchronizing {
         shared: Arc<Shared>,
         synchonization_src: Bytes,
     },
 }
 
+impl State {
+    fn pid(&self) -> ProcessId {
+        match self {
+            State::Active { shared } => shared.pid(),
+            State::Synchronizing { shared, .. } => shared.pid(),
+        }
+    }
+}
+
 #[derive(Debug)]
-struct Shared;
+struct Shared {
+    pid: ProcessId,
+}
+
+impl Shared {
+    fn new(node: &[u8]) -> Self {
+        Self {
+            pid: murmur3_hash(node),
+        }
+    }
+
+    fn pid(&self) -> ProcessId {
+        self.pid
+    }
+}
 
 /// Possibly a bad idea, but using an enum instead of a boolean to determine if a key is owned by a node or not.
 /// This is mostly useful because the [`OwnsKeyResponse::False`] variant contains the addrs of the node
@@ -62,14 +88,44 @@ pub enum OwnsKeyResponse {
     False { addr: Bytes },
 }
 
+#[derive(Debug)]
+pub struct Metadata {
+    pub versions: VersionVector,
+}
+
+impl Metadata {
+    /// Serializes [`Metadata`] into [`Bytes`]
+    ///
+    /// FIXME: This impl is really inefficient due to the amount of memory copies.
+    /// The operating of adding "framing"/metadata to [`Bytes`] is something that we do a lot...
+    /// we might need a better abstratction/data structure to deal with the properly
+    pub fn serialize(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+        buf.put_u32(self.versions.serialized_size() as u32);
+        buf.put_slice(&self.versions.serialize());
+
+        buf.freeze()
+    }
+
+    pub fn deserialize(self_pid: u128, serialized: Bytes) -> Result<Metadata> {
+        Ok(Metadata {
+            versions: VersionVector::deserialize(self_pid, serialized)?,
+        })
+    }
+}
+
 impl Db {
     /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
-    pub fn new(storage_engine: StorageEngine, cluster_state: Option<Arc<ClusterState>>) -> Self {
+    pub fn new(
+        own_addr: Bytes,
+        storage_engine: StorageEngine,
+        cluster_state: Option<Arc<ClusterState>>,
+    ) -> Self {
         Self {
             storage_engine,
             cluster_state,
             own_state: State::Active {
-                shared: Arc::new(Shared),
+                shared: Arc::new(Shared::new(&own_addr)),
             },
         }
     }
@@ -78,14 +134,44 @@ impl Db {
     ///
     /// TODO: Should the checks regarding ownership of keys/partitions be moved to this function
     /// instead of delegated to the Put [`crate::cmd::Command`]
-    pub async fn put(&self, key: Bytes, value: Bytes, replication: bool) -> Result<()> {
+    pub async fn put(
+        &self,
+        key: Bytes,
+        value: Bytes,
+        replication: bool,
+        metadata: Option<Bytes>,
+    ) -> Result<()> {
         if let Some(cluster_state) = self.cluster_state.as_ref() {
             if replication {
                 event!(Level::DEBUG, "Executing a replication Put");
                 // if this is a replication PUT, we don't have to deal with quorum
-                self.storage_engine.put(key, value).await?;
+                if let Some(metadata) = metadata {
+                    let mut value_and_metadata = BytesMut::new();
+                    value_and_metadata.put_slice(&metadata);
+                    value_and_metadata.put_slice(&value);
+
+                    self.storage_engine
+                        .put(key, value_and_metadata.freeze())
+                        .await?;
+                } else {
+                    return Err(Error::InvalidRequest {
+                        reason: "Replication PUT MUST include metadata".to_string(),
+                    });
+                }
             } else {
                 event!(Level::DEBUG, "Executing a coordinator Put");
+
+                let mut metadata = if let Some(metadata) = metadata {
+                    Metadata::deserialize(self.own_state.pid(), metadata)?
+                } else {
+                    Metadata {
+                        versions: VersionVector::new(self.own_state.pid()),
+                    }
+                };
+
+                metadata.versions.increment();
+                let serialized_metadata = metadata.serialize();
+
                 // if this is not a replication PUT, we have to honor quorum before returning a success
                 // if we have a quorum config, we have to make sure we wrote to enough replicas
                 let quorum_config = cluster_state.quorum_config();
@@ -97,7 +183,12 @@ impl Db {
                 // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
                 let preference_list = self.preference_list(&key)?;
                 for node in preference_list {
-                    futures.push(self.do_put(key.clone(), value.clone(), node))
+                    futures.push(self.do_put(
+                        key.clone(),
+                        value.clone(),
+                        serialized_metadata.clone(),
+                        node,
+                    ))
                 }
 
                 // for now, let's wait til all futures either succeed or fail.
@@ -140,6 +231,8 @@ impl Db {
             }
         } else {
             event!(Level::DEBUG, "Executing non-cluster PUT");
+            // FIXME: The distinction between Cluster and Standalone modes is getting unbearable..
+            // Either rework it so that they can co-exist correctly or drop the standalone mode
             self.storage_engine.put(key, value).await?;
         }
 
@@ -147,10 +240,21 @@ impl Db {
     }
 
     /// Wrapper function that allows the same inteface to put locally (using [`Db`]) or remotely (using [`DbClient`])
-    async fn do_put(&self, key: Bytes, value: Bytes, dst_addr: Bytes) -> Result<()> {
+    async fn do_put(
+        &self,
+        key: Bytes,
+        value: Bytes,
+        serialized_metadata: Bytes,
+        dst_addr: Bytes,
+    ) -> Result<()> {
+        // FIXME: A lot of duplication in this operation
+        let mut value_and_metadata = BytesMut::new();
+        value_and_metadata.put_slice(&serialized_metadata);
+        value_and_metadata.put_slice(&value);
+        let value_and_metadata = value_and_metadata.freeze();
         if let OwnsKeyResponse::True = self.owns_key(&dst_addr)? {
             event!(Level::DEBUG, "Storing key : {:?} locally", key);
-            self.storage_engine.put(key, value).await?;
+            self.storage_engine.put(key, value_and_metadata).await?;
         } else {
             event!(
                 Level::DEBUG,
@@ -174,7 +278,14 @@ impl Db {
             client.connect().await?;
 
             // TODO: assert the response
-            let _ = client.put(key.clone(), value, true).await?;
+            let _ = client
+                .put(
+                    key.clone(),
+                    value,
+                    Some(hex::encode(serialized_metadata)),
+                    true,
+                )
+                .await?;
 
             event!(Level::DEBUG, "stored key : {:?} locally", key);
         }
@@ -185,12 +296,24 @@ impl Db {
     /// Retrieves the [`Bytes`] associated with the given key.
     ///
     /// If the key is not found, [Option::None] is returned
-    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<Bytes>> {
+    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
         if let Some(cluster_state) = self.cluster_state.as_ref() {
             event!(Level::DEBUG, "Executing cluster GET");
             if replica {
                 event!(Level::DEBUG, "Executing a replica GET");
-                Ok(self.storage_engine.get(&key).await?)
+
+                // FIXME: Horrible logic
+                let value_and_metadata = self.storage_engine.get(&key).await?;
+                let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
+                    let metadata_size = value_and_metadata.get_u32();
+                    let metadata =
+                        Bytes::copy_from_slice(&value_and_metadata[0..metadata_size as usize]);
+                    let value =
+                        Bytes::copy_from_slice(&value_and_metadata[metadata_size as usize..]);
+                    (metadata, value)
+                });
+
+                Ok(metadata_value_option)
             } else {
                 event!(Level::INFO, "executing a non-replica GET");
                 let quorum_config = cluster_state.quorum_config();
@@ -232,7 +355,22 @@ impl Db {
 
                 let quorum_result = quorum.finish();
                 match quorum_result.evaluation {
-                    Evaluation::Reached => Ok(quorum_result.successes[0].clone()),
+                    Evaluation::Reached => {
+                        let value_and_metadata = quorum_result.successes[0].clone();
+                        let metadata_value_option =
+                            value_and_metadata.map(|mut value_and_metadata| {
+                                let metadata_size = value_and_metadata.get_u32();
+                                let metadata = Bytes::copy_from_slice(
+                                    &value_and_metadata[0..metadata_size as usize],
+                                );
+                                let value = Bytes::copy_from_slice(
+                                    &value_and_metadata[metadata_size as usize..],
+                                );
+                                (metadata, value)
+                            });
+
+                        Ok(metadata_value_option)
+                    }
                     Evaluation::NotReached | Evaluation::Unreachable => {
                         if quorum_result.failures.iter().all(|err| err.is_not_found()) {
                             return Err(Error::NotFound { key: key.clone() });
@@ -250,7 +388,12 @@ impl Db {
             }
         } else {
             event!(Level::INFO, "executing a non-cluster GET");
-            Ok(self.storage_engine.get(&key).await?)
+            Ok(self
+                .storage_engine
+                .get(&key)
+                .await?
+                // FIXME: Again, this difference in format between cluster and standalone is aweful
+                .map(|v| (Bytes::new(), v)))
         }
     }
 

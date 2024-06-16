@@ -109,6 +109,9 @@ impl VersionVector {
     ///
     /// Format: |  u32  | u128 |   u128  | u128 |   u128  | ...
     ///         |n_items|  pid | version |  pid | version | ...
+    ///
+    /// Note/FIXME: The serialized format does not include any integrity checks (crcs etc..)
+    /// This means that either an upper layer needs to add it or that this format will have to change
     pub fn serialize(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_u32(self.versions.len() as u32);
@@ -118,6 +121,11 @@ impl VersionVector {
         }
 
         buf.freeze()
+    }
+
+    /// returns the expected serialized size of the given [`VersionVector`] instance
+    pub fn serialized_size(&self) -> usize {
+        size_of::<u32>() + self.versions.len() * 2 * size_of::<u128>()
     }
 
     /// Deserializes [bytes::Bytes] into [`VersionVector`]
@@ -146,6 +154,10 @@ impl VersionVector {
             id: self_id,
             versions,
         })
+    }
+
+    pub fn n_versions(&self) -> usize {
+        self.versions.len()
     }
 }
 

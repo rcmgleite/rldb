@@ -67,9 +67,18 @@ impl Server {
                     config::StorageEngine::InMemory => Arc::new(InMemory::default()),
                 };
 
+                let own_addr = Bytes::from(listener.local_addr().unwrap().to_string());
                 Ok(Self {
                     client_listener: listener,
-                    db: Arc::new(Db::new(storage_engine, None)),
+                    db: Arc::new(Db::new(
+                        // FIXME: Multiple things
+                        //  1. using local addrs here doesn't make sense
+                        //  2. internally this is used to derive PID - this will break once we have vnodes
+                        //  3. The overall conversions necessary to store Bytes are horrible
+                        own_addr,
+                        storage_engine,
+                        None,
+                    )),
                 })
             }
 
@@ -99,9 +108,10 @@ impl Server {
                 // the node know that it has to shutdown? Something to be fixed soon...
                 tokio::spawn(start_heartbeat(partitioning_scheme.clone()));
 
+                let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
                 Ok(Self {
                     client_listener,
-                    db: Arc::new(Db::new(storage_engine, Some(partitioning_scheme))),
+                    db: Arc::new(Db::new(own_addr, storage_engine, Some(partitioning_scheme))),
                 })
             }
         }

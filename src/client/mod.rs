@@ -33,6 +33,7 @@ pub trait Client {
         &mut self,
         key: Bytes,
         value: Bytes,
+        metadata: Option<String>,
         replication: bool,
     ) -> error::Result<PutResponse>;
     /// Heartbeat command interface

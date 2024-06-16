@@ -35,7 +35,10 @@ impl Get {
     /// Executes the [`Get`] command using the specified [`Db`] instance
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
         if let Some(resp) = db.get(self.key.clone(), self.replica).await? {
-            Ok(GetResponse { value: resp })
+            Ok(GetResponse {
+                value: resp.1,
+                metadata: hex::encode(resp.0),
+            })
         } else {
             Err(Error::NotFound { key: self.key })
         }
@@ -62,4 +65,6 @@ impl IntoMessage for Get {
 pub struct GetResponse {
     #[serde(with = "serde_utf8_bytes")]
     pub value: Bytes,
+    /// A hex encoded representation of the object metadata
+    pub metadata: String,
 }

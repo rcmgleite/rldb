@@ -4,6 +4,7 @@ use bytes::Bytes;
 use rldb::{
     client::{self, db_client::DbClient, Client},
     cluster::state::NodeStatus,
+    persistency::Metadata,
     server::Server,
 };
 use tokio::{
@@ -92,11 +93,21 @@ async fn test_cluster_put_get_success() {
     let key = Bytes::from("foo");
     let value = Bytes::from("bar");
 
-    let response = client.put(key.clone(), value.clone(), false).await.unwrap();
+    let response = client
+        .put(key.clone(), value.clone(), None, false)
+        .await
+        .unwrap();
     assert_eq!(response.message, "Ok".to_string());
 
     let response = client.get(key, false).await.unwrap();
     assert_eq!(response.value, value);
+
+    // TODO: unclear if we should assert on the metadata at this level..
+    // might be better to just make sure we can deserialize it and leave specific tests for
+    // the Metadata component itself
+    let hex_decoded_metadata = hex::decode(response.metadata).unwrap();
+    let metadata = Metadata::deserialize(0, hex_decoded_metadata.into()).unwrap();
+    assert_eq!(metadata.versions.n_versions(), 1);
 
     for handle in handles {
         drop(handle.shutdown);
@@ -154,7 +165,7 @@ async fn test_cluster_put_no_quorum() {
     let value = Bytes::from("bar");
 
     let err = client
-        .put(key.clone(), value.clone(), false)
+        .put(key.clone(), value.clone(), None, false)
         .await
         .err()
         .unwrap();
@@ -203,7 +214,10 @@ async fn test_cluster_get_no_quorum() {
     let key = Bytes::from("foo");
     let value = Bytes::from("bar");
 
-    let response = client.put(key.clone(), value.clone(), false).await.unwrap();
+    let response = client
+        .put(key.clone(), value.clone(), None, false)
+        .await
+        .unwrap();
     assert_eq!(response.message, "Ok".to_string());
 
     // kill 2 of the serves

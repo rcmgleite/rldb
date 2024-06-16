@@ -94,11 +94,17 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn put(&mut self, key: Bytes, value: Bytes, replication: bool) -> Result<PutResponse> {
+    async fn put(
+        &mut self,
+        key: Bytes,
+        value: Bytes,
+        metadata: Option<String>,
+        replication: bool,
+    ) -> Result<PutResponse> {
         let put_cmd = if replication {
-            cmd::put::Put::new_replication(key, value)
+            cmd::put::Put::new_replication(key, value, metadata)
         } else {
-            cmd::put::Put::new(key, value)
+            cmd::put::Put::new(key, value, metadata)
         };
         let req = Message::from(put_cmd).serialize();
 

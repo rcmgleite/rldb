@@ -28,7 +28,10 @@ async fn test_standalone_put_get_success() {
     let key = Bytes::from("A key");
     let value = Bytes::from("A value");
 
-    let response = client.put(key.clone(), value.clone(), false).await.unwrap();
+    let response = client
+        .put(key.clone(), value.clone(), None, false)
+        .await
+        .unwrap();
     assert_eq!(response.message, "Ok".to_string());
 
     let response = client.get(key, false).await.unwrap();
