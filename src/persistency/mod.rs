@@ -31,8 +31,7 @@ pub struct Db {
     /// The underlaying storage engine
     storage_engine: StorageEngine,
     /// Cluster state.
-    /// This will be present if this is configured as a cluster node
-    cluster_state: Option<Arc<ClusterState>>,
+    cluster_state: Arc<ClusterState>,
     /// Own state
     own_state: State,
 }
@@ -119,7 +118,7 @@ impl Db {
     pub fn new(
         own_addr: Bytes,
         storage_engine: StorageEngine,
-        cluster_state: Option<Arc<ClusterState>>,
+        cluster_state: Arc<ClusterState>,
     ) -> Self {
         Self {
             storage_engine,
@@ -141,99 +140,89 @@ impl Db {
         replication: bool,
         metadata: Option<Bytes>,
     ) -> Result<()> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            if replication {
-                event!(Level::DEBUG, "Executing a replication Put");
-                // if this is a replication PUT, we don't have to deal with quorum
-                if let Some(metadata) = metadata {
-                    let mut value_and_metadata = BytesMut::new();
-                    value_and_metadata.put_slice(&metadata);
-                    value_and_metadata.put_slice(&value);
+        if replication {
+            event!(Level::DEBUG, "Executing a replication Put");
+            // if this is a replication PUT, we don't have to deal with quorum
+            if let Some(metadata) = metadata {
+                let mut value_and_metadata = BytesMut::new();
+                value_and_metadata.put_slice(&metadata);
+                value_and_metadata.put_slice(&value);
 
-                    self.storage_engine
-                        .put(key, value_and_metadata.freeze())
-                        .await?;
-                } else {
-                    return Err(Error::InvalidRequest {
-                        reason: "Replication PUT MUST include metadata".to_string(),
-                    });
-                }
+                self.storage_engine
+                    .put(key, value_and_metadata.freeze())
+                    .await?;
             } else {
-                event!(Level::DEBUG, "Executing a coordinator Put");
+                return Err(Error::InvalidRequest {
+                    reason: "Replication PUT MUST include metadata".to_string(),
+                });
+            }
+        } else {
+            event!(Level::DEBUG, "Executing a coordinator Put");
 
-                let mut metadata = if let Some(metadata) = metadata {
-                    Metadata::deserialize(self.own_state.pid(), metadata)?
-                } else {
-                    Metadata {
-                        versions: VersionVector::new(self.own_state.pid()),
-                    }
-                };
-
-                metadata.versions.increment();
-                let serialized_metadata = metadata.serialize();
-
-                // if this is not a replication PUT, we have to honor quorum before returning a success
-                // if we have a quorum config, we have to make sure we wrote to enough replicas
-                let quorum_config = cluster_state.quorum_config();
-                let mut quorum =
-                    MinRequiredReplicas::new(quorum_config.replicas, quorum_config.writes)?;
-                let mut futures = FuturesUnordered::new();
-
-                // the preference list will contain the node itself (otherwise there's a bug).
-                // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
-                let preference_list = self.preference_list(&key)?;
-                for node in preference_list {
-                    futures.push(self.do_put(
-                        key.clone(),
-                        value.clone(),
-                        serialized_metadata.clone(),
-                        node,
-                    ))
+            let mut metadata = if let Some(metadata) = metadata {
+                Metadata::deserialize(self.own_state.pid(), metadata)?
+            } else {
+                Metadata {
+                    versions: VersionVector::new(self.own_state.pid()),
                 }
+            };
 
-                // for now, let's wait til all futures either succeed or fail.
-                // we don't strictly need that since we are quorum based..
-                // doing it this way now for simplicity but this will have a latency impact
-                //
-                // For more info, see similar comment on [`crate::cmd::get::Get`]
-                while let Some(res) = futures.next().await {
-                    match res {
-                        Ok(_) => {
-                            let _ = quorum.update(OperationStatus::Success(()));
-                        }
-                        Err(err) => {
-                            event!(Level::WARN, "Failed a PUT: {:?}", err);
-                            let _ = quorum.update(OperationStatus::Failure(err));
-                        }
+            metadata.versions.increment();
+            let serialized_metadata = metadata.serialize();
+
+            // if this is not a replication PUT, we have to honor quorum before returning a success
+            // if we have a quorum config, we have to make sure we wrote to enough replicas
+            let quorum_config = self.cluster_state.quorum_config();
+            let mut quorum =
+                MinRequiredReplicas::new(quorum_config.replicas, quorum_config.writes)?;
+            let mut futures = FuturesUnordered::new();
+
+            // the preference list will contain the node itself (otherwise there's a bug).
+            // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
+            let preference_list = self.preference_list(&key)?;
+            for node in preference_list {
+                futures.push(self.do_put(
+                    key.clone(),
+                    value.clone(),
+                    serialized_metadata.clone(),
+                    node,
+                ))
+            }
+
+            // for now, let's wait til all futures either succeed or fail.
+            // we don't strictly need that since we are quorum based..
+            // doing it this way now for simplicity but this will have a latency impact
+            //
+            // For more info, see similar comment on [`crate::cmd::get::Get`]
+            while let Some(res) = futures.next().await {
+                match res {
+                    Ok(_) => {
+                        let _ = quorum.update(OperationStatus::Success(()));
                     }
-                }
-
-                let quorum_result = quorum.finish();
-
-                match quorum_result.evaluation {
-                    Evaluation::Reached => {}
-                    Evaluation::NotReached | Evaluation::Unreachable => {
-                        event!(
-                            Level::WARN,
-                            "quorum not reached: successes: {}, failures: {}",
-                            quorum_result.successes.len(),
-                            quorum_result.failures.len(),
-                        );
-                        return Err(Error::QuorumNotReached {
-                            operation: "Put".to_string(),
-                            reason: format!(
-                                "Unable to execute a min of {} PUTs",
-                                quorum_config.writes
-                            ),
-                        });
+                    Err(err) => {
+                        event!(Level::WARN, "Failed a PUT: {:?}", err);
+                        let _ = quorum.update(OperationStatus::Failure(err));
                     }
                 }
             }
-        } else {
-            event!(Level::DEBUG, "Executing non-cluster PUT");
-            // FIXME: The distinction between Cluster and Standalone modes is getting unbearable..
-            // Either rework it so that they can co-exist correctly or drop the standalone mode
-            self.storage_engine.put(key, value).await?;
+
+            let quorum_result = quorum.finish();
+
+            match quorum_result.evaluation {
+                Evaluation::Reached => {}
+                Evaluation::NotReached | Evaluation::Unreachable => {
+                    event!(
+                        Level::WARN,
+                        "quorum not reached: successes: {}, failures: {}",
+                        quorum_result.successes.len(),
+                        quorum_result.failures.len(),
+                    );
+                    return Err(Error::QuorumNotReached {
+                        operation: "Put".to_string(),
+                        reason: format!("Unable to execute a min of {} PUTs", quorum_config.writes),
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -297,103 +286,87 @@ impl Db {
     ///
     /// If the key is not found, [Option::None] is returned
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            event!(Level::DEBUG, "Executing cluster GET");
-            if replica {
-                event!(Level::DEBUG, "Executing a replica GET");
+        if replica {
+            event!(Level::DEBUG, "Executing a replica GET");
 
-                // FIXME: Horrible logic
-                let value_and_metadata = self.storage_engine.get(&key).await?;
-                let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
-                    let metadata_size = value_and_metadata.get_u32();
-                    let metadata =
-                        Bytes::copy_from_slice(&value_and_metadata[0..metadata_size as usize]);
-                    let value =
-                        Bytes::copy_from_slice(&value_and_metadata[metadata_size as usize..]);
-                    (metadata, value)
-                });
+            // FIXME: Horrible logic
+            let value_and_metadata = self.storage_engine.get(&key).await?;
+            let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
+                let metadata_size = value_and_metadata.get_u32();
+                let metadata =
+                    Bytes::copy_from_slice(&value_and_metadata[0..metadata_size as usize]);
+                let value = Bytes::copy_from_slice(&value_and_metadata[metadata_size as usize..]);
+                (metadata, value)
+            });
 
-                Ok(metadata_value_option)
-            } else {
-                event!(Level::INFO, "executing a non-replica GET");
-                let quorum_config = cluster_state.quorum_config();
-                let mut quorum =
-                    MinRequiredReplicas::new(quorum_config.replicas, quorum_config.reads)?;
+            Ok(metadata_value_option)
+        } else {
+            event!(Level::INFO, "executing a non-replica GET");
+            let quorum_config = self.cluster_state.quorum_config();
+            let mut quorum = MinRequiredReplicas::new(quorum_config.replicas, quorum_config.reads)?;
 
-                let mut futures = FuturesUnordered::new();
-                let preference_list = self.preference_list(&key)?;
-                event!(Level::INFO, "GET preference_list {:?}", preference_list);
-                for node in preference_list {
-                    futures.push(self.do_get(key.clone(), node))
-                }
+            let mut futures = FuturesUnordered::new();
+            let preference_list = self.preference_list(&key)?;
+            event!(Level::INFO, "GET preference_list {:?}", preference_list);
+            for node in preference_list {
+                futures.push(self.do_get(key.clone(), node))
+            }
 
-                // TODO: we are waiting for all nodes on the preference list to return either error or success
-                // this will cause latency issues and it's no necessary.. fix it later
-                // Note: The [`crate::cluster::quorum::Quorum`] API already handles early evaluation
-                // in case quorum is not reachable. The change to needed here is fairly small in this regard.
-                // What's missing is deciding on:
-                //  1. what do we do with inflight requests in case of an early success?
-                //  2. (only for the PUT case) what do we do with successful PUT requests? rollback? what does that look like?
-                while let Some(res) = futures.next().await {
-                    match res {
-                        Ok(res) => {
-                            let _ = quorum.update(OperationStatus::Success(res));
-                        }
-                        Err(err) => {
-                            event!(
-                                Level::WARN,
-                                "Got a failed GET from a remote host: {:?}",
-                                err
-                            );
-
-                            let _ = quorum.update(OperationStatus::Failure(err));
-                        }
+            // TODO: we are waiting for all nodes on the preference list to return either error or success
+            // this will cause latency issues and it's no necessary.. fix it later
+            // Note: The [`crate::cluster::quorum::Quorum`] API already handles early evaluation
+            // in case quorum is not reachable. The change to needed here is fairly small in this regard.
+            // What's missing is deciding on:
+            //  1. what do we do with inflight requests in case of an early success?
+            //  2. (only for the PUT case) what do we do with successful PUT requests? rollback? what does that look like?
+            while let Some(res) = futures.next().await {
+                match res {
+                    Ok(res) => {
+                        let _ = quorum.update(OperationStatus::Success(res));
                     }
-                }
+                    Err(err) => {
+                        event!(
+                            Level::WARN,
+                            "Got a failed GET from a remote host: {:?}",
+                            err
+                        );
 
-                event!(Level::INFO, "quorum: {:?}", quorum);
-
-                let quorum_result = quorum.finish();
-                match quorum_result.evaluation {
-                    Evaluation::Reached => {
-                        let value_and_metadata = quorum_result.successes[0].clone();
-                        let metadata_value_option =
-                            value_and_metadata.map(|mut value_and_metadata| {
-                                let metadata_size = value_and_metadata.get_u32();
-                                let metadata = Bytes::copy_from_slice(
-                                    &value_and_metadata[0..metadata_size as usize],
-                                );
-                                let value = Bytes::copy_from_slice(
-                                    &value_and_metadata[metadata_size as usize..],
-                                );
-                                (metadata, value)
-                            });
-
-                        Ok(metadata_value_option)
-                    }
-                    Evaluation::NotReached | Evaluation::Unreachable => {
-                        if quorum_result.failures.iter().all(|err| err.is_not_found()) {
-                            return Err(Error::NotFound { key: key.clone() });
-                        }
-
-                        Err(Error::QuorumNotReached {
-                            operation: "Get".to_string(),
-                            reason: format!(
-                                "Unable to execute {} successful GETs",
-                                quorum_config.reads
-                            ),
-                        })
+                        let _ = quorum.update(OperationStatus::Failure(err));
                     }
                 }
             }
-        } else {
-            event!(Level::INFO, "executing a non-cluster GET");
-            Ok(self
-                .storage_engine
-                .get(&key)
-                .await?
-                // FIXME: Again, this difference in format between cluster and standalone is aweful
-                .map(|v| (Bytes::new(), v)))
+
+            event!(Level::INFO, "quorum: {:?}", quorum);
+
+            let quorum_result = quorum.finish();
+            match quorum_result.evaluation {
+                Evaluation::Reached => {
+                    let value_and_metadata = quorum_result.successes[0].clone();
+                    let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
+                        let metadata_size = value_and_metadata.get_u32();
+                        let metadata =
+                            Bytes::copy_from_slice(&value_and_metadata[0..metadata_size as usize]);
+                        let value =
+                            Bytes::copy_from_slice(&value_and_metadata[metadata_size as usize..]);
+                        (metadata, value)
+                    });
+
+                    Ok(metadata_value_option)
+                }
+                Evaluation::NotReached | Evaluation::Unreachable => {
+                    if quorum_result.failures.iter().all(|err| err.is_not_found()) {
+                        return Err(Error::NotFound { key: key.clone() });
+                    }
+
+                    Err(Error::QuorumNotReached {
+                        operation: "Get".to_string(),
+                        reason: format!(
+                            "Unable to execute {} successful GETs",
+                            quorum_config.reads
+                        ),
+                    })
+                }
+            }
         }
     }
 
@@ -433,16 +406,12 @@ impl Db {
 
     /// Verifies if the key provided is owned by self.
     pub fn owns_key(&self, key: &[u8]) -> Result<OwnsKeyResponse> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            if cluster_state.owns_key(key)? {
-                Ok(OwnsKeyResponse::True)
-            } else {
-                Ok(OwnsKeyResponse::False {
-                    addr: cluster_state.key_owner(key).unwrap().addr.clone(),
-                })
-            }
-        } else {
+        if self.cluster_state.owns_key(key)? {
             Ok(OwnsKeyResponse::True)
+        } else {
+            Ok(OwnsKeyResponse::False {
+                addr: self.cluster_state.key_owner(key).unwrap().addr.clone(),
+            })
         }
     }
 
@@ -450,31 +419,17 @@ impl Db {
     ///
     /// This is used as part of the Gossip protocol to propagate cluster changes across all nodes
     pub fn update_cluster_state(&self, nodes: Vec<ClusterNode>) -> Result<()> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            Ok(cluster_state.merge_nodes(nodes)?)
-        } else {
-            Ok(())
-        }
+        Ok(self.cluster_state.merge_nodes(nodes)?)
     }
 
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            Ok(cluster_state.preference_list(key, cluster_state.quorum_config().replicas)?)
-        } else {
-            // TODO: There must be a way to make sure a caller is not allowed to call methods that only make sense
-            // in cluster mode instead of a runtime failure.
-            Err(Error::Generic {
-                reason: "preference_list is meaningless for rldb not in cluster mode".to_string(),
-            })
-        }
+        Ok(self
+            .cluster_state
+            .preference_list(key, self.cluster_state.quorum_config().replicas)?)
     }
 
     pub fn cluster_state(&self) -> Result<Vec<ClusterNode>> {
-        if let Some(cluster_state) = self.cluster_state.as_ref() {
-            Ok(cluster_state.get_nodes()?)
-        } else {
-            Ok(Vec::new())
-        }
+        Ok(self.cluster_state.get_nodes()?)
     }
 }
 

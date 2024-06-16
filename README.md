@@ -23,23 +23,16 @@ RLDB (Rusty Learning Dynamo Database) is an educational project that provides a 
 
 ## Running the server
 
-### Standalone Mode
-```
-cargo run --bin rldb-server -- --config-path conf/standalone.json
-```
-
-### Cluster Mode
-
 
 1. Start nodes using config files in different terminals
 ```
-cargo run --bin rldb-server -- --config-path conf/cluster_node_1.json
+cargo run --bin rldb-server -- --config-path conf/node_1.json
 ```
 ```
-cargo run --bin rldb-server -- --config-path conf/cluster_node_2.json
+cargo run --bin rldb-server -- --config-path conf/node_2.json
 ```
 ```
-cargo run --bin rldb-server -- --config-path conf/cluster_node_3.json
+cargo run --bin rldb-server -- --config-path conf/node_3.json
 ```
 
 2. Include the new nodes to the cluster

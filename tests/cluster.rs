@@ -70,9 +70,9 @@ async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
 #[tokio::test]
 async fn test_cluster_put_get_success() {
     let handles = start_servers(vec![
-        "tests/conf/test_cluster_node_1.json".into(),
-        "tests/conf/test_cluster_node_2.json".into(),
-        "tests/conf/test_cluster_node_3.json".into(),
+        "tests/conf/test_node_1.json".into(),
+        "tests/conf/test_node_2.json".into(),
+        "tests/conf/test_node_3.json".into(),
     ])
     .await;
 
@@ -118,9 +118,9 @@ async fn test_cluster_put_get_success() {
 #[tokio::test]
 async fn test_cluster_key_not_found() {
     let handles = start_servers(vec![
-        "tests/conf/test_cluster_node_1.json".into(),
-        "tests/conf/test_cluster_node_2.json".into(),
-        "tests/conf/test_cluster_node_3.json".into(),
+        "tests/conf/test_node_1.json".into(),
+        "tests/conf/test_node_2.json".into(),
+        "tests/conf/test_node_3.json".into(),
     ])
     .await;
 
@@ -156,7 +156,7 @@ async fn test_cluster_key_not_found() {
 
 #[tokio::test]
 async fn test_cluster_put_no_quorum() {
-    let handles = start_servers(vec!["tests/conf/test_cluster_node_1.json".into()]).await;
+    let handles = start_servers(vec!["tests/conf/test_node_1.json".into()]).await;
 
     let mut client = DbClient::new(handles[0].client_listener_addr.clone());
     client.connect().await.unwrap();
@@ -191,9 +191,9 @@ async fn test_cluster_put_no_quorum() {
 #[tokio::test]
 async fn test_cluster_get_no_quorum() {
     let mut handles = start_servers(vec![
-        "tests/conf/test_cluster_node_1.json".into(),
-        "tests/conf/test_cluster_node_2.json".into(),
-        "tests/conf/test_cluster_node_3.json".into(),
+        "tests/conf/test_node_1.json".into(),
+        "tests/conf/test_node_2.json".into(),
+        "tests/conf/test_node_3.json".into(),
     ])
     .await;
 

@@ -1,0 +1,11 @@
+{
+    "port": 0,
+    "storage_engine": "in_memory",
+    "quorum": {
+        "n": 3,
+        "r": 2,
+        "w": 2
+    },
+    "partitioning_scheme": "consistent_hashing"
+}
+

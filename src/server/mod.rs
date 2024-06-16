@@ -27,7 +27,7 @@ use tokio::{
 };
 use tracing::{event, instrument, Level};
 
-use self::config::{ClusterConfig, Config, StandaloneConfig};
+use self::config::Config;
 use self::message::Message;
 
 pub mod config;
@@ -56,64 +56,32 @@ impl Server {
             reason: e.to_string(),
         })?;
 
-        match config.cluster_type {
-            config::ClusterType::Standalone(StandaloneConfig {
-                port,
-                storage_engine,
-            }) => {
-                let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+        {
+            let client_listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).await?;
 
-                let storage_engine = match storage_engine {
-                    config::StorageEngine::InMemory => Arc::new(InMemory::default()),
-                };
+            let storage_engine = match config.storage_engine {
+                config::StorageEngine::InMemory => Arc::new(InMemory::default()),
+            };
 
-                let own_addr = Bytes::from(listener.local_addr().unwrap().to_string());
-                Ok(Self {
-                    client_listener: listener,
-                    db: Arc::new(Db::new(
-                        // FIXME: Multiple things
-                        //  1. using local addrs here doesn't make sense
-                        //  2. internally this is used to derive PID - this will break once we have vnodes
-                        //  3. The overall conversions necessary to store Bytes are horrible
-                        own_addr,
-                        storage_engine,
-                        None,
-                    )),
-                })
-            }
+            // configure the partitioning_scheme. This step already
+            // includes the node itself to the ring.
+            let cluster_state = match config.partitioning_scheme {
+                config::PartitioningScheme::ConsistentHashing => Arc::new(State::new(
+                    Box::<ConsistentHashing>::default(),
+                    client_listener.local_addr().unwrap().to_string().into(),
+                    config.quorum,
+                )?),
+            };
 
-            config::ClusterType::Cluster(ClusterConfig {
-                port,
-                storage_engine,
-                partitioning_scheme,
-                quorum,
-            }) => {
-                let client_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+            // FIXME: There's a big problem here - if this task exists how will
+            // the node know that it has to shutdown? Something to be fixed soon...
+            tokio::spawn(start_heartbeat(cluster_state.clone()));
 
-                let storage_engine = match storage_engine {
-                    config::StorageEngine::InMemory => Arc::new(InMemory::default()),
-                };
-
-                // configure the partitioning_scheme. This step already
-                // includes the node itself to the ring.
-                let partitioning_scheme = match partitioning_scheme {
-                    config::PartitioningScheme::ConsistentHashing => Arc::new(State::new(
-                        Box::<ConsistentHashing>::default(),
-                        client_listener.local_addr().unwrap().to_string().into(),
-                        quorum,
-                    )?),
-                };
-
-                // FIXME: There's a big problem here - if this task exists how will
-                // the node know that it has to shutdown? Something to be fixed soon...
-                tokio::spawn(start_heartbeat(partitioning_scheme.clone()));
-
-                let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
-                Ok(Self {
-                    client_listener,
-                    db: Arc::new(Db::new(own_addr, storage_engine, Some(partitioning_scheme))),
-                })
-            }
+            let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
+            Ok(Self {
+                client_listener,
+                db: Arc::new(Db::new(own_addr, storage_engine, cluster_state)),
+            })
         }
     }
 

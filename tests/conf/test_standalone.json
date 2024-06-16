@@ -1,7 +1,0 @@
-{
-    "standalone": {
-        "port": 0,
-        "storage_engine": "in_memory"
-    }
-}
-
