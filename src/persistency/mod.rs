@@ -77,16 +77,6 @@ impl Shared {
     }
 }
 
-/// Possibly a bad idea, but using an enum instead of a boolean to determine if a key is owned by a node or not.
-/// This is mostly useful because the [`OwnsKeyResponse::False`] variant contains the addrs of the node
-/// that actually holds the key, which is sent back to the client as part of the TCP response.
-pub enum OwnsKeyResponse {
-    /// The node provided to [`Db::owns_key`] owns the key
-    True,
-    /// The node provided to [`Db::owns_key`] does not own the key. The actual owner is returned in the addr field.
-    False { addr: Bytes },
-}
-
 #[derive(Debug)]
 pub struct Metadata {
     pub versions: VersionVector,
@@ -241,7 +231,7 @@ impl Db {
         value_and_metadata.put_slice(&serialized_metadata);
         value_and_metadata.put_slice(&value);
         let value_and_metadata = value_and_metadata.freeze();
-        if let OwnsKeyResponse::True = self.owns_key(&dst_addr)? {
+        if self.owns_key(&dst_addr)? {
             event!(Level::DEBUG, "Storing key : {:?} locally", key);
             self.storage_engine.put(key, value_and_metadata).await?;
         } else {
@@ -371,7 +361,7 @@ impl Db {
     }
 
     async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<Bytes>> {
-        if let OwnsKeyResponse::True = self.owns_key(&src_addr)? {
+        if self.owns_key(&src_addr)? {
             event!(
                 Level::INFO,
                 "node is part of preference_list {:?}",
@@ -405,14 +395,8 @@ impl Db {
     }
 
     /// Verifies if the key provided is owned by self.
-    pub fn owns_key(&self, key: &[u8]) -> Result<OwnsKeyResponse> {
-        if self.cluster_state.owns_key(key)? {
-            Ok(OwnsKeyResponse::True)
-        } else {
-            Ok(OwnsKeyResponse::False {
-                addr: self.cluster_state.key_owner(key).unwrap().addr.clone(),
-            })
-        }
+    pub fn owns_key(&self, key: &[u8]) -> Result<bool> {
+        self.cluster_state.owns_key(key)
     }
 
     /// Updates the cluster state based on the nodes provided.
