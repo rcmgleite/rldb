@@ -291,7 +291,7 @@ impl Db {
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");
-            self.into_metadata_and_data(self.storage_engine.get(&key).await?)
+            Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
         } else {
             event!(Level::INFO, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
@@ -357,7 +357,7 @@ impl Db {
                 "node is part of preference_list {:?}",
                 src_addr
             );
-            self.into_metadata_and_data(self.storage_engine.get(&key).await?)
+            Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
         } else {
             event!(
                 Level::INFO,
@@ -390,8 +390,7 @@ impl Db {
 
     // This function is very poorly written, has bad error handling, performs bad and is not readable.
     // we will fix it in due time ;)
-    fn into_metadata_and_data(
-        &self,
+    pub fn into_metadata_and_data(
         metadata_and_data: Option<Bytes>,
     ) -> Result<Option<(Bytes, Bytes)>> {
         let value_and_metadata = metadata_and_data;
@@ -430,10 +429,63 @@ impl Db {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+    use std::sync::Arc;
+
+    use crate::{
+        client::mock::MockClientFactoryBuilder,
+        cluster::state::{Node, State},
+        persistency::{partitioning::consistent_hashing::ConsistentHashing, Db},
+        server::config::Quorum,
+        storage_engine::in_memory::InMemory,
+    };
 
     #[tokio::test]
-    async fn test_put_get_simple() {
-        // TODO
-        // panic!()
+    async fn test_db_put_get_simple() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let own_local_addr = Bytes::from("127.0.0.1:3000");
+        let cluster_state = Arc::new(
+            State::new(
+                Box::<ConsistentHashing>::default(),
+                own_local_addr.clone(),
+                Quorum::default(),
+            )
+            .unwrap(),
+        );
+        cluster_state
+            .merge_nodes(vec![
+                Node {
+                    addr: Bytes::from("127.0.0.1:3001"),
+                    status: crate::cluster::state::NodeStatus::Ok,
+                    tick: 0,
+                },
+                Node {
+                    addr: Bytes::from("127.0.0.1:3002"),
+                    status: crate::cluster::state::NodeStatus::Ok,
+                    tick: 0,
+                },
+            ])
+            .unwrap();
+
+        let storage_engine = Arc::new(InMemory::default());
+
+        let db = Arc::new(Db::new(
+            own_local_addr,
+            storage_engine,
+            cluster_state,
+            Box::new(MockClientFactoryBuilder::new().build()),
+        ));
+
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+        let metadata = None;
+        db.put(key.clone(), value.clone(), replication, metadata)
+            .await
+            .unwrap();
+
+        let get_result = db.get(key, replication).await.unwrap().unwrap();
+
+        assert_eq!(get_result.1, value);
     }
 }

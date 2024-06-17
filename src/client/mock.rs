@@ -12,13 +12,21 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
     },
+    persistency::Db,
+    storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
 };
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use super::{error::Error, error::Result, Client, Factory as ClientFactory};
+
+type StorageEngineType = Arc<dyn StorageEngine + Send + Sync>;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -41,13 +49,18 @@ pub struct MockClientFaults {
 pub struct MockClient {
     pub faults: MockClientFaults,
     pub stats: MockClientStats,
+    pub storage_engine: StorageEngineType,
 }
 
 impl MockClient {
-    pub fn new(faults: MockClientFaults) -> Self {
+    pub fn new(
+        faults: MockClientFaults,
+        storage_engine: Arc<dyn StorageEngine + Send + Sync + 'static>,
+    ) -> Self {
         Self {
             faults,
             stats: Default::default(),
+            storage_engine,
         }
     }
 }
@@ -72,17 +85,40 @@ impl Client for MockClient {
     async fn ping(&mut self) -> Result<PingResponse> {
         todo!()
     }
-    async fn get(&mut self, _key: Bytes, _replica: bool) -> Result<GetResponse> {
-        todo!()
+    async fn get(&mut self, key: Bytes, _replica: bool) -> Result<GetResponse> {
+        let response = Db::into_metadata_and_data(self.storage_engine.get(&key).await.unwrap())?;
+
+        if let Some((metadata, data)) = response {
+            Ok(GetResponse {
+                value: data,
+                metadata: String::from_utf8(hex::encode(metadata).into_bytes()).unwrap(),
+            })
+        } else {
+            Err(Error::NotFound { key })
+        }
     }
     async fn put(
         &mut self,
-        _key: Bytes,
-        _value: Bytes,
-        _metadata: Option<String>,
+        key: Bytes,
+        value: Bytes,
+        metadata: Option<String>,
         _replication: bool,
     ) -> Result<PutResponse> {
-        todo!()
+        if let Some(metadata) = metadata {
+            let mut value_and_metadata = BytesMut::new();
+            value_and_metadata.put_slice(&hex::decode(metadata).unwrap());
+            value_and_metadata.put_slice(&value);
+            self.storage_engine
+                .put(key, value_and_metadata.freeze())
+                .await
+                .unwrap();
+        } else {
+            self.storage_engine.put(key, value).await.unwrap();
+        }
+
+        Ok(PutResponse {
+            message: "Ok".to_string(),
+        })
     }
     async fn heartbeat(&mut self, _: Vec<Node>) -> Result<HeartbeatResponse> {
         self.stats.heartbeat.n_calls += 1;
@@ -114,12 +150,19 @@ impl Client for MockClient {
 
 pub struct MockClientFactory {
     pub faults: MockClientFaults,
+    pub storage_engines: Arc<Mutex<HashMap<String, StorageEngineType>>>,
 }
 
 #[async_trait]
 impl ClientFactory for MockClientFactory {
-    async fn get(&self, _: String) -> Result<Box<dyn Client + Send>> {
-        let mut client = MockClient::new(self.faults.clone());
+    async fn get(&self, addr: String) -> Result<Box<dyn Client + Send>> {
+        let storage_engine = {
+            let mut guard = self.storage_engines.lock().unwrap();
+            let storage_engine = guard.entry(addr).or_insert(Arc::new(InMemory::default()));
+            storage_engine.clone()
+        };
+
+        let mut client = MockClient::new(self.faults.clone(), storage_engine);
         client.connect().await?;
         Ok(Box::new(client))
     }
@@ -163,6 +206,7 @@ impl MockClientFactoryBuilder {
     pub fn build(self) -> MockClientFactory {
         MockClientFactory {
             faults: self.faults,
+            storage_engines: Default::default(),
         }
     }
 }
