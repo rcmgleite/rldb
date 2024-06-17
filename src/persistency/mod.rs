@@ -14,19 +14,19 @@ pub mod quorum;
 pub mod versioning;
 
 use crate::{
-    client::{db_client::DbClient, Client},
+    client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
     error::{Error, Result},
 };
 
 /// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
 pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + Sync + 'static>;
+pub type ClientFactory = Box<dyn Factory + Send + Sync>;
 
 /// Db is the abstraction that connects storage_engine and overall database state
 /// in a single interface.
 /// It exists mainly to hide [`StorageEngine`] and [`ClusterState`] details so that they can
 /// be updated later on..
-#[derive(Debug)]
 pub struct Db {
     /// The underlaying storage engine
     storage_engine: StorageEngine,
@@ -34,6 +34,18 @@ pub struct Db {
     cluster_state: Arc<ClusterState>,
     /// Own state
     own_state: State,
+    /// Used to construct [`crate::client::Client`] instances
+    client_factory: ClientFactory,
+}
+
+impl std::fmt::Debug for Db {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Db")
+            .field("storage_engine", &self.storage_engine)
+            .field("cluster_state", &self.cluster_state)
+            .field("own_state", &self.own_state)
+            .finish()
+    }
 }
 
 /// State of the current node
@@ -109,6 +121,7 @@ impl Db {
         own_addr: Bytes,
         storage_engine: StorageEngine,
         cluster_state: Arc<ClusterState>,
+        client_factory: ClientFactory,
     ) -> Self {
         Self {
             storage_engine,
@@ -116,6 +129,7 @@ impl Db {
             own_state: State::Active {
                 shared: Arc::new(Shared::new(&own_addr)),
             },
+            client_factory,
         }
     }
 
@@ -241,8 +255,9 @@ impl Db {
                 key,
                 dst_addr
             );
-            let mut client =
-                DbClient::new(String::from_utf8(dst_addr.clone().into()).map_err(|e| {
+            let mut client = self
+                .client_factory
+                .get(String::from_utf8(dst_addr.into()).map_err(|e| {
                     event!(
                         Level::ERROR,
                         "Unable to parse addr as utf8 {}",
@@ -251,10 +266,8 @@ impl Db {
                     Error::Internal(crate::error::Internal::Unknown {
                         reason: e.to_string(),
                     })
-                })?);
-
-            event!(Level::DEBUG, "connecting to node node: {:?}", dst_addr);
-            client.connect().await?;
+                })?)
+                .await?;
 
             // TODO: assert the response
             let _ = client
@@ -351,8 +364,10 @@ impl Db {
                 "node is NOT part of preference_list {:?} - will have to do a remote call",
                 src_addr
             );
-            let mut client =
-                DbClient::new(String::from_utf8(src_addr.clone().into()).map_err(|e| {
+
+            let mut client = self
+                .client_factory
+                .get(String::from_utf8(src_addr.clone().into()).map_err(|e| {
                     event!(
                         Level::ERROR,
                         "Unable to parse addr as utf8 {}",
@@ -361,10 +376,8 @@ impl Db {
                     Error::Internal(crate::error::Internal::Unknown {
                         reason: e.to_string(),
                     })
-                })?);
-
-            event!(Level::INFO, "connecting to node node: {:?}", src_addr);
-            client.connect().await?;
+                })?)
+                .await?;
 
             let resp = client.get(key.clone(), true).await?;
             // FIXME: remove unwrap()
@@ -417,5 +430,10 @@ impl Db {
 
 #[cfg(test)]
 mod tests {
-    // TODO
+
+    #[tokio::test]
+    async fn test_put_get_simple() {
+        // TODO
+        // panic!()
+    }
 }

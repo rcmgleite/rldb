@@ -9,6 +9,7 @@
 //!    - writes the response back to the client
 //!  2. The Request protocol
 //!    - currently a simple header (cmd,length) and a json encoded payload
+use crate::client::db_client::DbClientFactory;
 use crate::cluster::heartbeat::start_heartbeat;
 use crate::cluster::state::State;
 use crate::cmd::Command;
@@ -80,7 +81,12 @@ impl Server {
             let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
             Ok(Self {
                 client_listener,
-                db: Arc::new(Db::new(own_addr, storage_engine, cluster_state)),
+                db: Arc::new(Db::new(
+                    own_addr,
+                    storage_engine,
+                    cluster_state,
+                    Box::new(DbClientFactory),
+                )),
             })
         }
     }
