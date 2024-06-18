@@ -419,17 +419,16 @@ impl Db {
     ///
     /// This is used as part of the Gossip protocol to propagate cluster changes across all nodes
     pub fn update_cluster_state(&self, nodes: Vec<ClusterNode>) -> Result<()> {
-        Ok(self.cluster_state.merge_nodes(nodes)?)
+        self.cluster_state.merge_nodes(nodes)
     }
 
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
-        Ok(self
-            .cluster_state
-            .preference_list(key, self.cluster_state.quorum_config().replicas)?)
+        self.cluster_state
+            .preference_list(key, self.cluster_state.quorum_config().replicas)
     }
 
     pub fn cluster_state(&self) -> Result<Vec<ClusterNode>> {
-        Ok(self.cluster_state.get_nodes()?)
+        self.cluster_state.get_nodes()
     }
 }
 

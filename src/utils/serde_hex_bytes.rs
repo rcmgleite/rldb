@@ -20,7 +20,7 @@ pub fn serialize<S: Serializer>(v: &Option<Bytes>, s: S) -> Result<S::Ok, S::Err
 /// Enable serde to deserialize utf8 [`String`] into [`Bytes`]
 pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Bytes>, D::Error> {
     let stringified = String::deserialize(d)?;
-    if stringified == "null".to_string() {
+    if stringified == *"null" {
         return Ok(None);
     }
 
