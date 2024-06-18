@@ -568,4 +568,46 @@ mod tests {
 
         assert_eq!(deserialized_metadata, expected_metadata);
     }
+
+    #[tokio::test]
+    async fn test_db_put_no_quorum() {
+        // Initializes DB with a only one node registered in State.
+        // This means that no Put operation can succeed due to quorum requirements (at least 2 successes)
+        let own_local_addr = Bytes::from("127.0.0.1:3000");
+        let cluster_state = Arc::new(
+            State::new(
+                Box::<ConsistentHashing>::default(),
+                own_local_addr.clone(),
+                Quorum::default(),
+            )
+            .unwrap(),
+        );
+
+        let storage_engine = Arc::new(InMemory::default());
+
+        let db = Arc::new(Db::new(
+            own_local_addr,
+            storage_engine,
+            cluster_state,
+            Box::new(MockClientFactoryBuilder::new().build()),
+        ));
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+        let metadata = None;
+        let err = db
+            .put(key.clone(), value.clone(), replication, metadata)
+            .await
+            .err()
+            .unwrap();
+
+        match err {
+            Error::QuorumNotReached { operation, .. } => {
+                assert_eq!(operation, *"Put");
+            }
+            _ => {
+                panic!("Unexpected err: {}", err);
+            }
+        }
+    }
 }
