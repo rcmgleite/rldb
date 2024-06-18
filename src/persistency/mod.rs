@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
-use std::sync::Arc;
+use std::{mem::size_of, sync::Arc};
 use tracing::{event, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
 
@@ -80,7 +80,7 @@ struct Shared {
 impl Shared {
     fn new(node: &[u8]) -> Self {
         Self {
-            pid: murmur3_hash(node),
+            pid: process_id(node),
         }
     }
 
@@ -89,7 +89,11 @@ impl Shared {
     }
 }
 
-#[derive(Debug)]
+pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
+    murmur3_hash(addr)
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Metadata {
     pub versions: VersionVector,
 }
@@ -108,7 +112,9 @@ impl Metadata {
         buf.freeze()
     }
 
-    pub fn deserialize(self_pid: u128, serialized: Bytes) -> Result<Metadata> {
+    pub fn deserialize(self_pid: u128, mut serialized: Bytes) -> Result<Metadata> {
+        let serialized_size = serialized.get_u32() as usize;
+        serialized.truncate(serialized_size);
         Ok(Metadata {
             versions: VersionVector::deserialize(self_pid, serialized)?,
         })
@@ -388,16 +394,16 @@ impl Db {
         }
     }
 
-    // This function is very poorly written, has bad error handling, performs bad and is not readable.
-    // we will fix it in due time ;)
+    // FIXME: error handling
     pub fn into_metadata_and_data(
         metadata_and_data: Option<Bytes>,
     ) -> Result<Option<(Bytes, Bytes)>> {
         let value_and_metadata = metadata_and_data;
         let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
-            let metadata_size = value_and_metadata.get_u32();
-            let metadata = Bytes::copy_from_slice(&value_and_metadata[0..metadata_size as usize]);
-            let value = Bytes::copy_from_slice(&value_and_metadata[metadata_size as usize..]);
+            // clone here is necessary because get_u32() consumes 4 bytes out of the buffer
+            let metadata_size = value_and_metadata.clone().get_u32() as usize;
+            let value = value_and_metadata.split_off(size_of::<u32>() + metadata_size);
+            let metadata = value_and_metadata;
             (metadata, value)
         });
 
@@ -435,14 +441,17 @@ mod tests {
     use crate::{
         client::mock::MockClientFactoryBuilder,
         cluster::state::{Node, State},
-        persistency::{partitioning::consistent_hashing::ConsistentHashing, Db},
+        error::Error,
+        persistency::{
+            partitioning::consistent_hashing::ConsistentHashing, process_id, Db, Metadata,
+            VersionVector,
+        },
         server::config::Quorum,
         storage_engine::in_memory::InMemory,
     };
 
-    #[tokio::test]
-    async fn test_db_put_get_simple() {
-        let _ = tracing_subscriber::fmt::try_init();
+    /// Initializes a [`Db`] instance with 2 [`crate::client::mock::MockClient`]
+    fn initialize_state() -> (Bytes, Arc<Db>) {
         let own_local_addr = Bytes::from("127.0.0.1:3000");
         let cluster_state = Arc::new(
             State::new(
@@ -469,13 +478,20 @@ mod tests {
 
         let storage_engine = Arc::new(InMemory::default());
 
-        let db = Arc::new(Db::new(
-            own_local_addr,
-            storage_engine,
-            cluster_state,
-            Box::new(MockClientFactoryBuilder::new().build()),
-        ));
+        (
+            own_local_addr.clone(),
+            Arc::new(Db::new(
+                own_local_addr,
+                storage_engine,
+                cluster_state,
+                Box::new(MockClientFactoryBuilder::new().build()),
+            )),
+        )
+    }
 
+    #[tokio::test]
+    async fn test_db_put_get_simple() {
+        let (local_addr, db) = initialize_state();
         let key = Bytes::from("a key");
         let value = Bytes::from("a value");
         let replication = false;
@@ -484,8 +500,73 @@ mod tests {
             .await
             .unwrap();
 
-        let get_result = db.get(key, replication).await.unwrap().unwrap();
+        let (metadata, data) = db.get(key, replication).await.unwrap().unwrap();
 
-        assert_eq!(get_result.1, value);
+        assert_eq!(data, value);
+
+        let self_pid = process_id(&local_addr);
+        let deserialized_metadata = Metadata::deserialize(self_pid, metadata).unwrap();
+        let mut expected_metadata = Metadata {
+            versions: VersionVector::new(self_pid),
+        };
+        expected_metadata.versions.increment();
+
+        assert_eq!(deserialized_metadata, expected_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_db_replication_put_no_metadata() {
+        let (_, db) = initialize_state();
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = true;
+        let metadata = None;
+        let err = db
+            .put(key.clone(), value.clone(), replication, metadata)
+            .await
+            .err()
+            .unwrap();
+
+        match err {
+            Error::InvalidRequest { .. } => {}
+            _ => {
+                panic!("Unexpected error {}", err);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_db_put_with_existing_metadata() {
+        let (local_addr, db) = initialize_state();
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+        let mut initial_metadata = Metadata {
+            versions: VersionVector::new(1), // any random number would do
+        };
+        initial_metadata.versions.increment();
+
+        db.put(
+            key.clone(),
+            value.clone(),
+            replication,
+            Some(initial_metadata.serialize()),
+        )
+        .await
+        .unwrap();
+
+        let (received_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
+
+        assert_eq!(data, value);
+
+        let self_pid = process_id(&local_addr);
+        let deserialized_metadata = Metadata::deserialize(self_pid, received_metadata).unwrap();
+
+        let mut expected_metadata =
+            Metadata::deserialize(self_pid, initial_metadata.serialize()).unwrap();
+
+        expected_metadata.versions.increment();
+
+        assert_eq!(deserialized_metadata, expected_metadata);
     }
 }
