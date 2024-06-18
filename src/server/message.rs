@@ -92,3 +92,81 @@ impl<M: IntoMessage> From<M> for Message {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+
+    use bytes::BufMut;
+    use tokio::io::AsyncRead;
+
+    use crate::{
+        error::Error,
+        server::message::{Message, MAX_MESSAGE_SIZE},
+    };
+
+    enum MaxMessageSizeExceededAsyncReadState {
+        Idle,
+        WroteId,
+        WroteSize,
+    }
+    struct MaxMessageSizeExceededAsyncRead {
+        state: MaxMessageSizeExceededAsyncReadState,
+    }
+
+    impl Default for MaxMessageSizeExceededAsyncRead {
+        fn default() -> Self {
+            Self {
+                state: MaxMessageSizeExceededAsyncReadState::Idle,
+            }
+        }
+    }
+
+    impl AsyncRead for MaxMessageSizeExceededAsyncRead {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            match self.state {
+                MaxMessageSizeExceededAsyncReadState::Idle => {
+                    if buf.remaining() < size_of::<u32>() {
+                        cx.waker().wake_by_ref();
+                        return std::task::Poll::Pending;
+                    }
+                    buf.put_u32(0);
+                    self.get_mut().state = MaxMessageSizeExceededAsyncReadState::WroteId;
+                }
+                MaxMessageSizeExceededAsyncReadState::WroteId => {
+                    if buf.remaining() < size_of::<u32>() {
+                        cx.waker().wake_by_ref();
+                        return std::task::Poll::Pending;
+                    }
+                    buf.put_u32(MAX_MESSAGE_SIZE as u32 + 1);
+                    self.get_mut().state = MaxMessageSizeExceededAsyncReadState::WroteSize;
+                }
+                MaxMessageSizeExceededAsyncReadState::WroteSize => {
+                    panic!("Should not be required for test");
+                }
+            }
+
+            std::task::Poll::Ready(std::io::Result::Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn max_message_size_exceeded() {
+        let mut reader = MaxMessageSizeExceededAsyncRead::default();
+        let err = Message::try_from_async_read(&mut reader)
+            .await
+            .err()
+            .unwrap();
+
+        match err {
+            Error::InvalidRequest { .. } => {}
+            _ => {
+                panic!("Unexpected error: {}", err);
+            }
+        }
+    }
+}

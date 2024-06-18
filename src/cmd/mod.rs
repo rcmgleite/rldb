@@ -155,3 +155,58 @@ impl Command {
         Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+    use crate::cmd::get::Get;
+    use crate::cmd::put::Put;
+    use crate::error::Error;
+    use crate::server::message::Message;
+    use bytes::Bytes;
+
+    #[test]
+    fn invalid_request_mixed_request_id() {
+        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let mut message = Message::from(put_cmd);
+        message.id = Get::cmd_id();
+
+        let err = Command::try_from_message(message).err().unwrap();
+        match err {
+            Error::InvalidRequest { .. } => {}
+            _ => {
+                panic!("Unexpected error: {}", err);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_request_unrecognized_command() {
+        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let mut message = Message::from(put_cmd);
+        message.id = 99999;
+
+        let err = Command::try_from_message(message).err().unwrap();
+        match err {
+            Error::InvalidRequest { .. } => {}
+            _ => {
+                panic!("Unexpected error: {}", err);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_request_empty_payload() {
+        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let mut message = Message::from(put_cmd);
+        message.payload = None;
+
+        let err = Command::try_from_message(message).err().unwrap();
+        match err {
+            Error::InvalidRequest { .. } => {}
+            _ => {
+                panic!("Unexpected error: {}", err);
+            }
+        }
+    }
+}

@@ -25,5 +25,5 @@ impl IntoMessage for Ping {
 /// [`Ping`] response payload
 #[derive(Serialize, Deserialize)]
 pub struct PingResponse {
-    message: String,
+    pub message: String,
 }

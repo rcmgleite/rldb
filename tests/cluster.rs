@@ -246,3 +246,15 @@ async fn test_cluster_get_no_quorum() {
         handle.task_handle.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn test_cluster_ping() {
+    let handles = start_servers(vec!["tests/conf/test_node_1.json".into()]).await;
+
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
+    client.connect().await.unwrap();
+
+    let resp = client.ping().await.unwrap();
+
+    assert_eq!(resp.message, *"PONG");
+}
