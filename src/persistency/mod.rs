@@ -141,8 +141,17 @@ impl Db {
 
     /// Stores the given key and value into the underlying [`StorageEngine`]
     ///
-    /// TODO: Should the checks regarding ownership of keys/partitions be moved to this function
-    /// instead of delegated to the Put [`crate::cmd::Command`]
+    /// # Note on the format passed down to the storage engine:
+    ///  |      u32        |        u32      |  variable  |      u32    | variable |       u32       |  variable  |     u32     | variable | ...
+    ///  |Number of records| Metadata 1 size | Metadata 1 | Data 1 size | Data 1   | Metadata 2 size | Metadata 2 | Data 2 size |  Data    | ...
+    ///
+    /// # TODOs
+    ///  1. Handle partial successes
+    ///   - what do we do if a PUT failed but some nodes successfully wrote the data?
+    ///  2. Properly handle version / version conflicts
+    ///   - We first have to decide if they can actually happen - might not be possible if we don't allow nodes outside the preference list
+    ///     to accept puts.
+    ///  3. Include integrity checks (checksums) on both data and metadata
     pub async fn put(
         &self,
         key: Bytes,
@@ -294,6 +303,13 @@ impl Db {
     /// Retrieves the [`Bytes`] associated with the given key.
     ///
     /// If the key is not found, [Option::None] is returned
+    ///
+    /// # TODOs
+    ///  1. Handle version conflicts
+    ///    - we have to deal with the case in which we have multiple versions of the same data encountered
+    ///    - this will mean merging [`VersionVector`]s so that the client receives the merged version alongside an array of objects
+    ///  2. Handle integrity checks properly
+    ///  3. Implement Read Repair
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");
