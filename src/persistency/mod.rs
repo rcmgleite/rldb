@@ -160,7 +160,7 @@ impl Db {
         metadata: Option<Bytes>,
     ) -> Result<()> {
         if replication {
-            event!(Level::DEBUG, "Executing a replication Put");
+            event!(Level::INFO, "Executing a replication Put");
             // if this is a replication PUT, we don't have to deal with quorum
             if let Some(metadata) = metadata {
                 let mut value_and_metadata = BytesMut::new();
@@ -176,7 +176,7 @@ impl Db {
                 });
             }
         } else {
-            event!(Level::DEBUG, "Executing a coordinator Put");
+            event!(Level::INFO, "Executing a coordinator Put");
 
             let mut metadata = if let Some(metadata) = metadata {
                 Metadata::deserialize(self.own_state.pid(), metadata)?
@@ -261,12 +261,12 @@ impl Db {
         value_and_metadata.put_slice(&value);
         let value_and_metadata = value_and_metadata.freeze();
         if self.owns_key(&dst_addr)? {
-            event!(Level::DEBUG, "Storing key : {:?} locally", key);
+            event!(Level::INFO, "Storing key : {:?} locally", key);
             self.storage_engine.put(key, value_and_metadata).await?;
         } else {
             event!(
-                Level::DEBUG,
-                "will store key : {:?} in node: {:?}",
+                Level::INFO,
+                "will store key : {:?} in remote node: {:?}",
                 key,
                 dst_addr
             );
@@ -293,8 +293,6 @@ impl Db {
                     true,
                 )
                 .await?;
-
-            event!(Level::DEBUG, "stored key : {:?} locally", key);
         }
 
         Ok(())
@@ -312,7 +310,7 @@ impl Db {
     ///  3. Implement Read Repair
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
         if replica {
-            event!(Level::DEBUG, "Executing a replica GET");
+            event!(Level::INFO, "Executing a replica GET");
             Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
         } else {
             event!(Level::INFO, "executing a non-replica GET");
@@ -350,7 +348,7 @@ impl Db {
                 }
             }
 
-            event!(Level::INFO, "quorum: {:?}", quorum);
+            event!(Level::DEBUG, "quorum: {:?}", quorum);
 
             let quorum_result = quorum.finish();
             match quorum_result.evaluation {
@@ -374,16 +372,12 @@ impl Db {
 
     async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<(Bytes, Bytes)>> {
         if self.owns_key(&src_addr)? {
-            event!(
-                Level::INFO,
-                "node is part of preference_list {:?}",
-                src_addr
-            );
+            event!(Level::INFO, "Getting data from local storage");
             Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
         } else {
             event!(
-                Level::INFO,
-                "node is NOT part of preference_list {:?} - will have to do a remote call",
+                Level::DEBUG,
+                "Scheduling replication GET on node {:?} ",
                 src_addr
             );
 

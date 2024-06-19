@@ -26,7 +26,7 @@ use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
-use tracing::{event, instrument, Level};
+use tracing::{event, span, Instrument, Level};
 
 use self::config::Config;
 use self::message::Message;
@@ -108,7 +108,9 @@ impl Server {
             tokio::select! {
                 Ok((conn, _)) = self.client_listener.accept() => {
                     let db = self.db.clone();
-                    tokio::spawn(handle_connection(conn, db));
+                    let own_addr = conn.local_addr().unwrap().to_string();
+                    let span = span!(Level::INFO, "handle_connection", node = %own_addr);
+                    tokio::spawn(handle_connection(conn, db).instrument(span));
                 }
                 _ = &mut shutdown => {
                     event!(Level::WARN, "shutting down");
@@ -120,7 +122,6 @@ impl Server {
 }
 
 /// Helper function spanwed on a new [`tokio`] task for every newly accepted tcp connection.
-#[instrument(level = "debug")]
 async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
     loop {
         // Since [`Error`] is Serialize, in case of an error we can write it back to the client
