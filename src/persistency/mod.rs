@@ -714,4 +714,40 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_db_put_new_metadata_descends_from_original_metadata() {
+        let (local_addr, db) = initialize_state();
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+
+        // This put without metadata will generate the first metadata
+        db.put(key.clone(), value.clone(), replication, None)
+            .await
+            .unwrap();
+
+        let (received_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+
+        assert_eq!(data, value);
+
+        let new_value = Bytes::from("a new value");
+        // Note that we are piping the metadata received on GET to the PUT request.
+        // This is what guarantees that the new_value will override the previous value
+        db.put(
+            key.clone(),
+            new_value.clone(),
+            replication,
+            Some(received_metadata),
+        )
+        .await
+        .unwrap();
+
+        let (received_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
+        assert_eq!(data, new_value);
+        let self_pid = process_id(&local_addr);
+        let deserialized_metadata = Metadata::deserialize(self_pid, received_metadata).unwrap();
+        println!("DEBUG {:?}", deserialized_metadata);
+        assert_eq!(deserialized_metadata.versions.n_versions(), 1);
+    }
 }
