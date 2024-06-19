@@ -12,13 +12,13 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
     },
-    persistency::Db,
+    persistency::{versioning::version_vector::VersionVector, Metadata},
     storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
 };
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -50,17 +50,20 @@ pub struct MockClient {
     pub faults: MockClientFaults,
     pub stats: MockClientStats,
     pub storage_engine: StorageEngineType,
+    pub metadata_engine: StorageEngineType,
 }
 
 impl MockClient {
     pub fn new(
         faults: MockClientFaults,
-        storage_engine: Arc<dyn StorageEngine + Send + Sync + 'static>,
+        storage_engine: StorageEngineType,
+        metadata_engine: StorageEngineType,
     ) -> Self {
         Self {
             faults,
             stats: Default::default(),
             storage_engine,
+            metadata_engine,
         }
     }
 }
@@ -86,15 +89,15 @@ impl Client for MockClient {
         todo!()
     }
     async fn get(&mut self, key: Bytes, _replica: bool) -> Result<GetResponse> {
-        let response = Db::into_metadata_and_data(self.storage_engine.get(&key).await.unwrap())?;
-
-        if let Some((metadata, data)) = response {
-            Ok(GetResponse {
+        let metadata = self.metadata_engine.get(&key).await.unwrap();
+        let data = self.storage_engine.get(&key).await.unwrap();
+        match (metadata, data) {
+            (None, None) => Err(Error::NotFound { key }),
+            (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
+            (Some(metadata), Some(data)) => Ok(GetResponse {
                 value: data,
                 metadata: String::from_utf8(hex::encode(metadata).into_bytes()).unwrap(),
-            })
-        } else {
-            Err(Error::NotFound { key })
+            }),
         }
     }
     async fn put(
@@ -105,15 +108,19 @@ impl Client for MockClient {
         _replication: bool,
     ) -> Result<PutResponse> {
         if let Some(metadata) = metadata {
-            let mut value_and_metadata = BytesMut::new();
-            value_and_metadata.put_slice(&hex::decode(metadata).unwrap());
-            value_and_metadata.put_slice(&value);
-            self.storage_engine
-                .put(key, value_and_metadata.freeze())
+            self.storage_engine.put(key.clone(), value).await.unwrap();
+            self.metadata_engine
+                .put(key, hex::decode(metadata).unwrap().into())
                 .await
                 .unwrap();
         } else {
-            self.storage_engine.put(key, value).await.unwrap();
+            let mut m = Metadata {
+                versions: VersionVector::new(0),
+                crc32c: 0,
+            };
+            m.versions.increment();
+            self.storage_engine.put(key.clone(), value).await.unwrap();
+            self.metadata_engine.put(key, m.serialize()).await.unwrap();
         }
 
         Ok(PutResponse {
@@ -151,6 +158,7 @@ impl Client for MockClient {
 pub struct MockClientFactory {
     pub faults: MockClientFaults,
     pub storage_engines: Arc<Mutex<HashMap<String, StorageEngineType>>>,
+    pub metadata_engines: Arc<Mutex<HashMap<String, StorageEngineType>>>,
 }
 
 #[async_trait]
@@ -158,11 +166,19 @@ impl ClientFactory for MockClientFactory {
     async fn get(&self, addr: String) -> Result<Box<dyn Client + Send>> {
         let storage_engine = {
             let mut guard = self.storage_engines.lock().unwrap();
-            let storage_engine = guard.entry(addr).or_insert(Arc::new(InMemory::default()));
+            let storage_engine = guard
+                .entry(addr.clone())
+                .or_insert(Arc::new(InMemory::default()));
             storage_engine.clone()
         };
 
-        let mut client = MockClient::new(self.faults.clone(), storage_engine);
+        let metadata_engine = {
+            let mut guard = self.metadata_engines.lock().unwrap();
+            let metadata_engine = guard.entry(addr).or_insert(Arc::new(InMemory::default()));
+            metadata_engine.clone()
+        };
+
+        let mut client = MockClient::new(self.faults.clone(), storage_engine, metadata_engine);
         client.connect().await?;
         Ok(Box::new(client))
     }
@@ -207,6 +223,7 @@ impl MockClientFactoryBuilder {
         MockClientFactory {
             faults: self.faults,
             storage_engines: Default::default(),
+            metadata_engines: Default::default(),
         }
     }
 }

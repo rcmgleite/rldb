@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
-use std::{mem::size_of, sync::Arc};
+use std::sync::Arc;
 use tracing::{event, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
 
@@ -17,10 +17,11 @@ use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
     error::{Error, Result},
+    storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 
 /// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
-pub type StorageEngine = Arc<dyn crate::storage_engine::StorageEngine + Send + Sync + 'static>;
+pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
 pub type ClientFactory = Box<dyn Factory + Send + Sync>;
 
 /// Db is the abstraction that connects storage_engine and overall database state
@@ -30,6 +31,13 @@ pub type ClientFactory = Box<dyn Factory + Send + Sync>;
 pub struct Db {
     /// The underlaying storage engine
     storage_engine: StorageEngine,
+    /// Metadata Storage engine - currently hardcoded to be in-memory
+    /// The idea of having a separate storage engine just for metadata is do that we can avoid
+    /// adding framing layers to the data we want to store to append/prepend the metadata.
+    /// Also, when we do PUTs, we have to validate metadata (version) prior to storing the data,
+    /// and without a separate storage engine for metadata, we would always require a GET before a PUT,
+    /// which introduces more overhead than needed.
+    metadata_engine: InMemory,
     /// Cluster state.
     cluster_state: Arc<ClusterState>,
     /// Own state
@@ -95,7 +103,44 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Metadata {
+    // crc32c of the bytes of the object we are trying to store
+    pub crc32c: u32,
+    // version vector of this object
     pub versions: VersionVector,
+}
+
+enum MetadataEvaluation {
+    Noop,
+    Override,
+    Conflict,
+}
+
+fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluation> {
+    match lhs.versions.causality(&rhs.versions) {
+        versioning::version_vector::VersionVectorOrd::Equals => {
+            // if versions are equal but crcs are not, something is wrong and the PUT operation has to fail
+            if lhs.crc32c != rhs.crc32c {
+                return Err(Error::InvalidRequest { reason: "Client trying to PUT different object using the same request context. This is an error".to_string() });
+            }
+            // otherwise this could simply mean that a client sent the same operation twice (a retry maybe?)
+            // in this case, we don't have to do anything...
+            Ok(MetadataEvaluation::Noop)
+        }
+        versioning::version_vector::VersionVectorOrd::HappenedBefore => {
+            // the data we are trying to store is actually older than what's already stored.
+            // This can happen due to read repair and active anti-entropy processes for instance.
+            Ok(MetadataEvaluation::Noop)
+        }
+        versioning::version_vector::VersionVectorOrd::HappenedAfter => {
+            // This means we are ok to override both data and metadata
+            Ok(MetadataEvaluation::Override)
+        }
+        versioning::version_vector::VersionVectorOrd::HappenedConcurrently => {
+            // now we have the problem of concurrent writes. Our current approach is to actually
+            // store both versions so that the client can deal with the conflict resolution
+            Ok(MetadataEvaluation::Conflict)
+        }
+    }
 }
 
 impl Metadata {
@@ -117,6 +162,7 @@ impl Metadata {
         serialized.truncate(serialized_size);
         Ok(Metadata {
             versions: VersionVector::deserialize(self_pid, serialized)?,
+            crc32c: 0, // TODO
         })
     }
 }
@@ -131,6 +177,7 @@ impl Db {
     ) -> Self {
         Self {
             storage_engine,
+            metadata_engine: InMemory::default(),
             cluster_state,
             own_state: State::Active {
                 shared: Arc::new(Shared::new(&own_addr)),
@@ -142,8 +189,8 @@ impl Db {
     /// Stores the given key and value into the underlying [`StorageEngine`]
     ///
     /// # Note on the format passed down to the storage engine:
-    ///  |      u32        |        u32      |  variable  |      u32    | variable |       u32       |  variable  |     u32     | variable | ...
-    ///  |Number of records| Metadata 1 size | Metadata 1 | Data 1 size | Data 1   | Metadata 2 size | Metadata 2 | Data 2 size |  Data    | ...
+    ///  |      u32        |      u32    | variable |     u32     | variable | ...
+    ///  |Number of records| Data 1 size | Data 1   | Data 2 size |  Data    | ...
     ///
     /// # TODOs
     ///  1. Handle partial successes
@@ -163,13 +210,33 @@ impl Db {
             event!(Level::INFO, "Executing a replication Put");
             // if this is a replication PUT, we don't have to deal with quorum
             if let Some(metadata) = metadata {
-                let mut value_and_metadata = BytesMut::new();
-                value_and_metadata.put_slice(&metadata);
-                value_and_metadata.put_slice(&value);
+                let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
+                if let Some(existing_metadata_for_key) = existing_metadata_for_key {
+                    // If we already have a metadata for the key being PUT, we have to understand if this new PUT
+                    // descends from what we have stored or if this is a concurrent put (see [`crate::persistency::versioning::VersionVector`])
+                    // for nomenclature description.
+                    let existing_metadata_for_key =
+                        Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
 
-                self.storage_engine
-                    .put(key, value_and_metadata.freeze())
-                    .await?;
+                    let deserialized_metadata =
+                        Metadata::deserialize(self.own_state.pid(), metadata.clone())?;
+
+                    match metadata_evaluation(&deserialized_metadata, &existing_metadata_for_key)? {
+                        MetadataEvaluation::Noop => return Ok(()),
+                        MetadataEvaluation::Override => {
+                            self.storage_engine.put(key.clone(), value).await?;
+                            self.metadata_engine.put(key, metadata).await?;
+                        }
+                        MetadataEvaluation::Conflict => {
+                            todo!()
+                        }
+                    }
+                } else {
+                    // if, on the other hand, there's no pre-existing metadata for this key, this is the first PUT
+                    // for the given key. just executed it.
+                    self.storage_engine.put(key.clone(), value).await?;
+                    self.metadata_engine.put(key, metadata).await?;
+                }
             } else {
                 return Err(Error::InvalidRequest {
                     reason: "Replication PUT MUST include metadata".to_string(),
@@ -183,6 +250,7 @@ impl Db {
             } else {
                 Metadata {
                     versions: VersionVector::new(self.own_state.pid()),
+                    crc32c: 0, // TODO
                 }
             };
 
@@ -255,14 +323,30 @@ impl Db {
         serialized_metadata: Bytes,
         dst_addr: Bytes,
     ) -> Result<()> {
-        // FIXME: A lot of duplication in this operation
-        let mut value_and_metadata = BytesMut::new();
-        value_and_metadata.put_slice(&serialized_metadata);
-        value_and_metadata.put_slice(&value);
-        let value_and_metadata = value_and_metadata.freeze();
         if self.owns_key(&dst_addr)? {
-            event!(Level::INFO, "Storing key : {:?} locally", key);
-            self.storage_engine.put(key, value_and_metadata).await?;
+            // FIXME: Implement the same logic for metadata validation than done in the outter PUT function
+            // This makes it very clear that that code structure is bad and therefore needs refactoring
+            let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
+            if let Some(existing_metadata_for_key) = existing_metadata_for_key {
+                let deserialized_metadata =
+                    Metadata::deserialize(self.own_state.pid(), serialized_metadata.clone())?;
+                let existing_metadata_for_key =
+                    Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
+                match metadata_evaluation(&deserialized_metadata, &existing_metadata_for_key)? {
+                    MetadataEvaluation::Noop => return Ok(()),
+                    MetadataEvaluation::Override => {
+                        self.storage_engine.put(key.clone(), value).await?;
+                        self.metadata_engine.put(key, serialized_metadata).await?;
+                    }
+                    MetadataEvaluation::Conflict => {
+                        todo!()
+                    }
+                }
+            } else {
+                event!(Level::INFO, "Storing key : {:?} locally", key);
+                self.storage_engine.put(key.clone(), value).await?;
+                self.metadata_engine.put(key, serialized_metadata).await?;
+            }
         } else {
             event!(
                 Level::INFO,
@@ -311,7 +395,19 @@ impl Db {
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
         if replica {
             event!(Level::INFO, "Executing a replica GET");
-            Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
+            if let Some(metadata) = self.metadata_engine.get(&key).await? {
+                if let Some(data) = self.storage_engine.get(&key).await? {
+                    return Ok(Some((metadata, data)));
+                } else {
+                    return Err(Error::Internal(crate::error::Internal::Logic {
+                        reason:
+                            "got a metadata entry without a corresponding data entry. This is a bug"
+                                .to_string(),
+                    }));
+                }
+            } else {
+                return Ok(None);
+            }
         } else {
             event!(Level::INFO, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
@@ -373,7 +469,19 @@ impl Db {
     async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<(Bytes, Bytes)>> {
         if self.owns_key(&src_addr)? {
             event!(Level::INFO, "Getting data from local storage");
-            Self::into_metadata_and_data(self.storage_engine.get(&key).await?)
+            if let Some(metadata) = self.metadata_engine.get(&key).await? {
+                if let Some(data) = self.storage_engine.get(&key).await? {
+                    return Ok(Some((metadata, data)));
+                } else {
+                    return Err(Error::Internal(crate::error::Internal::Logic {
+                        reason:
+                            "got a metadata entry without a corresponding data entry. This is a bug"
+                                .to_string(),
+                    }));
+                }
+            } else {
+                return Ok(None);
+            }
         } else {
             event!(
                 Level::DEBUG,
@@ -402,22 +510,6 @@ impl Db {
                 resp.value,
             )))
         }
-    }
-
-    // FIXME: error handling
-    pub fn into_metadata_and_data(
-        metadata_and_data: Option<Bytes>,
-    ) -> Result<Option<(Bytes, Bytes)>> {
-        let value_and_metadata = metadata_and_data;
-        let metadata_value_option = value_and_metadata.map(|mut value_and_metadata| {
-            // clone here is necessary because get_u32() consumes 4 bytes out of the buffer
-            let metadata_size = value_and_metadata.clone().get_u32() as usize;
-            let value = value_and_metadata.split_off(size_of::<u32>() + metadata_size);
-            let metadata = value_and_metadata;
-            (metadata, value)
-        });
-
-        Ok(metadata_value_option)
     }
 
     /// Verifies if the key provided is owned by self.
@@ -517,6 +609,7 @@ mod tests {
         let deserialized_metadata = Metadata::deserialize(self_pid, metadata).unwrap();
         let mut expected_metadata = Metadata {
             versions: VersionVector::new(self_pid),
+            crc32c: 0,
         };
         expected_metadata.versions.increment();
 
@@ -552,6 +645,7 @@ mod tests {
         let replication = false;
         let mut initial_metadata = Metadata {
             versions: VersionVector::new(1), // any random number would do
+            crc32c: 0,
         };
         initial_metadata.versions.increment();
 
