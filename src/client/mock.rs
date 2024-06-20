@@ -116,7 +116,6 @@ impl Client for MockClient {
         } else {
             let mut m = Metadata {
                 versions: VersionVector::new(0),
-                crc32c: 0,
             };
             m.versions.increment();
             self.storage_engine.put(key.clone(), value).await.unwrap();

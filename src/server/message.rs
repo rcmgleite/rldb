@@ -8,7 +8,7 @@ use std::mem::size_of;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::error::Result;
+use crate::error::{InvalidRequest, Result};
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
 /// than 1Mb of memory...
@@ -51,12 +51,12 @@ impl Message {
 
         let payload = if length > 0 {
             if length > MAX_MESSAGE_SIZE as u32 {
-                return Err(crate::error::Error::InvalidRequest {
-                    reason: format!(
-                        "Request length too long {} - max accepted value: {}",
-                        length, MAX_MESSAGE_SIZE
-                    ),
-                });
+                return Err(crate::error::Error::InvalidRequest(
+                    InvalidRequest::MaxMessageSizeExceeded {
+                        max: MAX_MESSAGE_SIZE,
+                        got: length as usize,
+                    },
+                ));
             }
             let mut buf = vec![0u8; length as usize];
             reader.read_exact(&mut buf).await?;
@@ -99,7 +99,7 @@ mod tests {
     use tokio::io::AsyncRead;
 
     use crate::{
-        error::Error,
+        error::{Error, InvalidRequest},
         server::message::{Message, MAX_MESSAGE_SIZE},
     };
 
@@ -127,7 +127,10 @@ mod tests {
             .unwrap();
 
         match err {
-            Error::InvalidRequest { .. } => {}
+            Error::InvalidRequest(InvalidRequest::MaxMessageSizeExceeded { max, got }) => {
+                assert_eq!(max, MAX_MESSAGE_SIZE);
+                assert_eq!(got, MAX_MESSAGE_SIZE + 1);
+            }
             _ => {
                 panic!("Unexpected error: {}", err);
             }

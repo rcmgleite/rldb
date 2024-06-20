@@ -27,7 +27,7 @@ use crate::{
         cluster::heartbeat::CMD_CLUSTER_HEARTBEAT, cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER,
         get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
     },
-    error::{Error, Result},
+    error::{Error, InvalidRequest, Result},
     persistency::Db,
     server::message::Message,
 };
@@ -52,25 +52,21 @@ macro_rules! try_from_message_with_payload {
     ($message:expr, $t:ident) => {{
         (|| {
             if $message.id != $t::cmd_id() {
-                return Err(Error::InvalidRequest {
-                    reason: format!(
-                        "Unable to construct Get Command from Request. Expected id {} got {}",
-                        $t::cmd_id(),
-                        $message.id
-                    ),
-                });
+                return Err(Error::InvalidRequest(
+                    InvalidRequest::UnableToConstructCommandFromMessage {
+                        expected_id: $t::cmd_id(),
+                        got: $message.id,
+                    },
+                ));
             }
 
             if let Some(payload) = $message.payload {
-                let s: $t =
-                    serde_json::from_slice(&payload).map_err(|e| Error::InvalidRequest {
-                        reason: format!("Invalid json payload for request {}", e.to_string()),
-                    })?;
+                let s: $t = serde_json::from_slice(&payload).map_err(|e| {
+                    Error::InvalidRequest(InvalidRequest::InvalidJsonPayload(e.to_string()))
+                })?;
                 Ok(s)
             } else {
-                return Err(Error::InvalidRequest {
-                    reason: "Message payload can't be None".to_string(),
-                });
+                return Err(Error::InvalidRequest(InvalidRequest::EmptyMessagePayload));
             }
         })()
     }};
@@ -143,9 +139,9 @@ impl Command {
             )?)),
             _ => {
                 event!(Level::WARN, "Unrecognized command: {}", message.id);
-                Err(Error::InvalidRequest {
-                    reason: format!("Unrecognized command: {}", message.id),
-                })
+                Err(Error::InvalidRequest(InvalidRequest::UnrecognizedCommand {
+                    id: message.id,
+                }))
             }
         }
     }
@@ -161,7 +157,7 @@ mod tests {
     use super::Command;
     use crate::cmd::get::Get;
     use crate::cmd::put::Put;
-    use crate::error::Error;
+    use crate::error::{Error, InvalidRequest};
     use crate::server::message::Message;
     use bytes::Bytes;
 
@@ -173,7 +169,7 @@ mod tests {
 
         let err = Command::try_from_message(message).err().unwrap();
         match err {
-            Error::InvalidRequest { .. } => {}
+            Error::InvalidRequest(InvalidRequest::InvalidJsonPayload(_)) => {}
             _ => {
                 panic!("Unexpected error: {}", err);
             }
@@ -188,7 +184,9 @@ mod tests {
 
         let err = Command::try_from_message(message).err().unwrap();
         match err {
-            Error::InvalidRequest { .. } => {}
+            Error::InvalidRequest(InvalidRequest::UnrecognizedCommand { id }) => {
+                assert_eq!(id, 99999);
+            }
             _ => {
                 panic!("Unexpected error: {}", err);
             }
@@ -203,7 +201,7 @@ mod tests {
 
         let err = Command::try_from_message(message).err().unwrap();
         match err {
-            Error::InvalidRequest { .. } => {}
+            Error::InvalidRequest(InvalidRequest::EmptyMessagePayload) => {}
             _ => {
                 panic!("Unexpected error: {}", err);
             }

@@ -16,9 +16,7 @@ pub enum Error {
         #[serde(with = "serde_utf8_bytes")]
         key: Bytes,
     },
-    InvalidRequest {
-        reason: String,
-    },
+    InvalidRequest(InvalidRequest),
     InvalidServerConfig {
         reason: String,
     },
@@ -83,4 +81,18 @@ pub enum Internal {
     Logic { reason: String },
     Unknown { reason: String },
     StorageEngine(crate::storage_engine::Error),
+}
+
+#[derive(Debug, Serialize)]
+pub enum InvalidRequest {
+    Generic { reason: String },
+    MaxMessageSizeExceeded { max: usize, got: usize },
+    StaleContextProvided,
+    EmptyContextWhenOverridingKey,
+    ReplicationPutMustIncludeContext,
+
+    UnableToConstructCommandFromMessage { expected_id: u32, got: u32 },
+    InvalidJsonPayload(String),
+    EmptyMessagePayload,
+    UnrecognizedCommand { id: u32 },
 }

@@ -7,7 +7,7 @@ use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
 use std::sync::Arc;
 use tracing::{event, Level};
-use versioning::version_vector::{ProcessId, VersionVector};
+use versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
 
 pub mod partitioning;
 pub mod quorum;
@@ -16,7 +16,7 @@ pub mod versioning;
 use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
-    error::{Error, Result},
+    error::{Error, InvalidRequest, Result},
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 
@@ -101,41 +101,31 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
     murmur3_hash(addr)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
-    // crc32c of the bytes of the object we are trying to store
-    pub crc32c: u32,
     // version vector of this object
     pub versions: VersionVector,
 }
 
 enum MetadataEvaluation {
-    Noop,
     Override,
     Conflict,
 }
 
 fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluation> {
     match lhs.versions.causality(&rhs.versions) {
-        versioning::version_vector::VersionVectorOrd::Equals => {
-            // if versions are equal but crcs are not, something is wrong and the PUT operation has to fail
-            if lhs.crc32c != rhs.crc32c {
-                return Err(Error::InvalidRequest { reason: "Client trying to PUT different object using the same request context. This is an error".to_string() });
-            }
-            // otherwise this could simply mean that a client sent the same operation twice (a retry maybe?)
-            // in this case, we don't have to do anything...
-            Ok(MetadataEvaluation::Noop)
-        }
-        versioning::version_vector::VersionVectorOrd::HappenedBefore => {
+        VersionVectorOrd::HappenedBefore | VersionVectorOrd::Equals => {
             // the data we are trying to store is actually older than what's already stored.
             // This can happen due to read repair and active anti-entropy processes for instance.
-            Ok(MetadataEvaluation::Noop)
+            // We return an error here to make sure the client knows the put was rejected and does not expect
+            // the value passed in this request to be stored
+            Err(Error::InvalidRequest(InvalidRequest::StaleContextProvided))
         }
-        versioning::version_vector::VersionVectorOrd::HappenedAfter => {
+        VersionVectorOrd::HappenedAfter => {
             // This means we are ok to override both data and metadata
             Ok(MetadataEvaluation::Override)
         }
-        versioning::version_vector::VersionVectorOrd::HappenedConcurrently => {
+        VersionVectorOrd::HappenedConcurrently => {
             // now we have the problem of concurrent writes. Our current approach is to actually
             // store both versions so that the client can deal with the conflict resolution
             Ok(MetadataEvaluation::Conflict)
@@ -162,7 +152,6 @@ impl Metadata {
         serialized.truncate(serialized_size);
         Ok(Metadata {
             versions: VersionVector::deserialize(self_pid, serialized)?,
-            crc32c: 0, // TODO
         })
     }
 }
@@ -222,40 +211,60 @@ impl Db {
                         Metadata::deserialize(self.own_state.pid(), metadata.clone())?;
 
                     match metadata_evaluation(&deserialized_metadata, &existing_metadata_for_key)? {
-                        MetadataEvaluation::Noop => return Ok(()),
-                        MetadataEvaluation::Override => {
-                            self.storage_engine.put(key.clone(), value).await?;
-                            self.metadata_engine.put(key, metadata).await?;
-                        }
                         MetadataEvaluation::Conflict => {
-                            todo!()
+                            return Err(Error::Internal(crate::error::Internal::Unknown {
+                                reason: "Puts with conflicts are currently not implemented"
+                                    .to_string(),
+                            }));
+                        }
+                        MetadataEvaluation::Override => {
+                            // fallthrough
                         }
                     }
-                } else {
-                    // if, on the other hand, there's no pre-existing metadata for this key, this is the first PUT
-                    // for the given key. just executed it.
-                    self.storage_engine.put(key.clone(), value).await?;
-                    self.metadata_engine.put(key, metadata).await?;
                 }
+                // if, on the other hand, there's no pre-existing metadata for this key, this is the first PUT
+                // for the given key. just executed it.
+                self.storage_engine.put(key.clone(), value).await?;
+                self.metadata_engine.put(key, metadata).await?;
             } else {
-                return Err(Error::InvalidRequest {
-                    reason: "Replication PUT MUST include metadata".to_string(),
-                });
+                return Err(Error::InvalidRequest(
+                    InvalidRequest::ReplicationPutMustIncludeContext,
+                ));
             }
         } else {
             event!(Level::INFO, "Executing a coordinator Put");
 
+            let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
             let mut metadata = if let Some(metadata) = metadata {
                 Metadata::deserialize(self.own_state.pid(), metadata)?
             } else {
+                // if we have a metadata stored but we didn't receive one via PUT, we know the client messed up. let's fail
+                if existing_metadata_for_key.is_some() {
+                    return Err(Error::InvalidRequest(
+                        InvalidRequest::EmptyContextWhenOverridingKey,
+                    ));
+                }
                 Metadata {
                     versions: VersionVector::new(self.own_state.pid()),
-                    crc32c: 0, // TODO
                 }
             };
 
             metadata.versions.increment();
-            let serialized_metadata = metadata.serialize();
+
+            if let Some(existing_metadata_for_key) = existing_metadata_for_key {
+                let existing_metadata_for_key =
+                    Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
+                match metadata_evaluation(&metadata, &existing_metadata_for_key)? {
+                    MetadataEvaluation::Conflict => {
+                        return Err(Error::Internal(crate::error::Internal::Unknown {
+                            reason: "Puts with conflicts are currently not implemented".to_string(),
+                        }));
+                    }
+                    MetadataEvaluation::Override => {
+                        // noop - fallthrough and just continue the execution
+                    }
+                }
+            }
 
             // if this is not a replication PUT, we have to honor quorum before returning a success
             // if we have a quorum config, we have to make sure we wrote to enough replicas
@@ -268,12 +277,7 @@ impl Db {
             // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
             let preference_list = self.preference_list(&key)?;
             for node in preference_list {
-                futures.push(self.do_put(
-                    key.clone(),
-                    value.clone(),
-                    serialized_metadata.clone(),
-                    node,
-                ))
+                futures.push(self.do_put(key.clone(), value.clone(), metadata.clone(), node))
             }
 
             // for now, let's wait til all futures either succeed or fail.
@@ -320,33 +324,13 @@ impl Db {
         &self,
         key: Bytes,
         value: Bytes,
-        serialized_metadata: Bytes,
+        metadata: Metadata,
         dst_addr: Bytes,
     ) -> Result<()> {
         if self.owns_key(&dst_addr)? {
-            // FIXME: Implement the same logic for metadata validation than done in the outter PUT function
-            // This makes it very clear that that code structure is bad and therefore needs refactoring
-            let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
-            if let Some(existing_metadata_for_key) = existing_metadata_for_key {
-                let deserialized_metadata =
-                    Metadata::deserialize(self.own_state.pid(), serialized_metadata.clone())?;
-                let existing_metadata_for_key =
-                    Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
-                match metadata_evaluation(&deserialized_metadata, &existing_metadata_for_key)? {
-                    MetadataEvaluation::Noop => return Ok(()),
-                    MetadataEvaluation::Override => {
-                        self.storage_engine.put(key.clone(), value).await?;
-                        self.metadata_engine.put(key, serialized_metadata).await?;
-                    }
-                    MetadataEvaluation::Conflict => {
-                        todo!()
-                    }
-                }
-            } else {
-                event!(Level::INFO, "Storing key : {:?} locally", key);
-                self.storage_engine.put(key.clone(), value).await?;
-                self.metadata_engine.put(key, serialized_metadata).await?;
-            }
+            event!(Level::INFO, "Storing key : {:?} locally", key);
+            self.storage_engine.put(key.clone(), value).await?;
+            self.metadata_engine.put(key, metadata.serialize()).await?;
         } else {
             event!(
                 Level::INFO,
@@ -373,7 +357,7 @@ impl Db {
                 .put(
                     key.clone(),
                     value,
-                    Some(hex::encode(serialized_metadata)),
+                    Some(hex::encode(metadata.serialize())),
                     true,
                 )
                 .await?;
@@ -397,16 +381,16 @@ impl Db {
             event!(Level::INFO, "Executing a replica GET");
             if let Some(metadata) = self.metadata_engine.get(&key).await? {
                 if let Some(data) = self.storage_engine.get(&key).await? {
-                    return Ok(Some((metadata, data)));
+                    Ok(Some((metadata, data)))
                 } else {
-                    return Err(Error::Internal(crate::error::Internal::Logic {
+                    Err(Error::Internal(crate::error::Internal::Logic {
                         reason:
                             "got a metadata entry without a corresponding data entry. This is a bug"
                                 .to_string(),
-                    }));
+                    }))
                 }
             } else {
-                return Ok(None);
+                Ok(None)
             }
         } else {
             event!(Level::INFO, "executing a non-replica GET");
@@ -471,16 +455,16 @@ impl Db {
             event!(Level::INFO, "Getting data from local storage");
             if let Some(metadata) = self.metadata_engine.get(&key).await? {
                 if let Some(data) = self.storage_engine.get(&key).await? {
-                    return Ok(Some((metadata, data)));
+                    Ok(Some((metadata, data)))
                 } else {
-                    return Err(Error::Internal(crate::error::Internal::Logic {
+                    Err(Error::Internal(crate::error::Internal::Logic {
                         reason:
                             "got a metadata entry without a corresponding data entry. This is a bug"
                                 .to_string(),
-                    }));
+                    }))
                 }
             } else {
-                return Ok(None);
+                Ok(None)
             }
         } else {
             event!(
@@ -542,10 +526,10 @@ mod tests {
     use crate::{
         client::mock::MockClientFactoryBuilder,
         cluster::state::{Node, State},
-        error::Error,
+        error::{Error, InvalidRequest},
         persistency::{
-            partitioning::consistent_hashing::ConsistentHashing, process_id, Db, Metadata,
-            VersionVector,
+            partitioning::consistent_hashing::ConsistentHashing, process_id,
+            versioning::version_vector::VersionVectorOrd, Db, Metadata, VersionVector,
         },
         server::config::Quorum,
         storage_engine::in_memory::InMemory,
@@ -609,7 +593,6 @@ mod tests {
         let deserialized_metadata = Metadata::deserialize(self_pid, metadata).unwrap();
         let mut expected_metadata = Metadata {
             versions: VersionVector::new(self_pid),
-            crc32c: 0,
         };
         expected_metadata.versions.increment();
 
@@ -630,7 +613,7 @@ mod tests {
             .unwrap();
 
         match err {
-            Error::InvalidRequest { .. } => {}
+            Error::InvalidRequest(InvalidRequest::ReplicationPutMustIncludeContext) => {}
             _ => {
                 panic!("Unexpected error {}", err);
             }
@@ -645,7 +628,6 @@ mod tests {
         let replication = false;
         let mut initial_metadata = Metadata {
             versions: VersionVector::new(1), // any random number would do
-            crc32c: 0,
         };
         initial_metadata.versions.increment();
 
@@ -727,7 +709,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (received_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let (first_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
 
         assert_eq!(data, value);
 
@@ -738,16 +720,107 @@ mod tests {
             key.clone(),
             new_value.clone(),
             replication,
-            Some(received_metadata),
+            Some(first_metadata.clone()),
         )
         .await
         .unwrap();
 
-        let (received_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
+        let (second_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
         assert_eq!(data, new_value);
         let self_pid = process_id(&local_addr);
-        let deserialized_metadata = Metadata::deserialize(self_pid, received_metadata).unwrap();
-        println!("DEBUG {:?}", deserialized_metadata);
-        assert_eq!(deserialized_metadata.versions.n_versions(), 1);
+        let deserialized_first_metadata = Metadata::deserialize(self_pid, first_metadata).unwrap();
+        let deserialized_second_metadata =
+            Metadata::deserialize(self_pid, second_metadata).unwrap();
+
+        assert_eq!(
+            deserialized_second_metadata
+                .versions
+                .causality(&deserialized_first_metadata.versions),
+            VersionVectorOrd::HappenedAfter
+        );
+    }
+
+    #[tokio::test]
+    async fn test_db_put_stale_version_with_empty_metadata() {
+        let (_, db) = initialize_state();
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+
+        // This put without metadata will generate the first metadata
+        db.put(key.clone(), value.clone(), replication, None)
+            .await
+            .unwrap();
+
+        let (_, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+
+        assert_eq!(data, value);
+
+        let new_value = Bytes::from("a new value");
+        // Now we do another put to the same key and again we don't pass any metadata.
+        // this means that this put should fail since it's trying to put a stale value
+        let err = db
+            .put(key.clone(), new_value.clone(), replication, None)
+            .await
+            .err()
+            .unwrap();
+
+        match err {
+            Error::InvalidRequest(InvalidRequest::EmptyContextWhenOverridingKey) => {}
+            _ => {
+                panic!("Unexpected err: {}", err);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_db_put_stale_version() {
+        let (local_addr, db) = initialize_state();
+        let key = Bytes::from("a key");
+        let value = Bytes::from("a value");
+        let replication = false;
+
+        let self_pid = process_id(&local_addr);
+        let mut first_metadata = Metadata {
+            versions: VersionVector::new(self_pid),
+        };
+
+        first_metadata.versions.increment();
+        first_metadata.versions.increment();
+
+        // This put without metadata will generate the first metadata
+        db.put(
+            key.clone(),
+            value.clone(),
+            replication,
+            Some(first_metadata.serialize()),
+        )
+        .await
+        .unwrap();
+
+        let (_, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+
+        assert_eq!(data, value);
+
+        let new_value = Bytes::from("a new value");
+        // Now we do another put to the same key and again we don't pass any metadata.
+        // this means that this put should fail since it's trying to put a stale value
+        let err = db
+            .put(
+                key.clone(),
+                new_value.clone(),
+                replication,
+                Some(first_metadata.serialize()),
+            )
+            .await
+            .err()
+            .unwrap();
+
+        match err {
+            Error::InvalidRequest(InvalidRequest::StaleContextProvided) => {}
+            _ => {
+                panic!("Unexpected err: {}", err);
+            }
+        }
     }
 }
