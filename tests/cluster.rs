@@ -9,13 +9,9 @@ use rldb::{
     server::Server,
 };
 use tokio::{
-    sync::oneshot::{channel, Receiver, Sender},
+    sync::oneshot::{channel, Sender},
     task::JoinHandle,
 };
-// TODO - extract to utils
-async fn shutdown_future(receiver: Receiver<()>) {
-    let _ = receiver.await;
-}
 
 struct ServerHandle {
     task_handle: JoinHandle<()>,
@@ -32,10 +28,7 @@ async fn start_servers(configs: Vec<PathBuf>) -> Vec<(ServerHandle, DbClient)> {
         let client_listener_addr = server.client_listener_local_addr().unwrap().to_string();
         let (shutdown_sender, shutdown_receiver) = channel();
         let server_handle = tokio::spawn(async move {
-            server
-                .run(shutdown_future(shutdown_receiver))
-                .await
-                .unwrap();
+            server.run(shutdown_receiver).await.unwrap();
         });
 
         handles.push(ServerHandle {
@@ -67,8 +60,8 @@ async fn start_servers(configs: Vec<PathBuf>) -> Vec<(ServerHandle, DbClient)> {
 }
 
 async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
-    // loops until the cluster state is properly propageted through gossip
-    let sleep_for = tokio::time::Duration::from_millis(10);
+    // loops until the cluster state is properly propageted through gossip for the given client
+    let sleep_for = tokio::time::Duration::from_millis(100);
     loop {
         let cluster_state = client.cluster_state().await.unwrap();
         if cluster_state.nodes.len() != n_nodes {
@@ -92,6 +85,16 @@ async fn stop_servers(handles: Vec<(ServerHandle, DbClient)>) {
         drop(handle.0.shutdown);
         handle.0.task_handle.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn test_cluster_ping() {
+    let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
+
+    let resp = handles[0].1.ping().await.unwrap();
+
+    assert_eq!(resp.message, *"PONG");
+    stop_servers(handles).await;
 }
 
 // By design, any node can receive puts for any keys.
@@ -145,11 +148,22 @@ async fn test_cluster_put_get_success() {
     stop_servers(handles).await;
 }
 
+// Now let's test a scenario in which we do a put (initially without providing metadata)
+// then we do:
+//  1. A get - to retreive the Context/Metadata stored in the previous PUT
+//  2. A second put, mutating the key and passing the Metadata retreived in the previous step as PUT argument
+//
+// This is the intented use of the GET/PUT API - a client always has to provide the context retrieved on GET
+// in order to properly update a key.
+//
+// The invariants of this test are:
+//  1. Every PUT must successfully update the key
+//    - Note that for this specific setup, no conflicts can happen since we are applying the changes sequentially.
+//  2. Every node of the cluster will be used as coordinator once - this means the version vector at the end has to have
+//   the same number of versions as the number of nodes in the cluster
 #[tokio::test]
-async fn test_cluster_put_get_with_existing_metadata_node_outside_preference_list() {
+async fn test_cluster_update_key_using_every_node_as_coorinator_once() {
     let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into(); 10]).await;
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     let key: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -171,9 +185,8 @@ async fn test_cluster_put_get_with_existing_metadata_node_outside_preference_lis
     for i in 1..handles.len() {
         let client = &mut handles[i].1;
         let get_response = client.get(key.clone(), false).await.unwrap();
-        println!("DEBUG: get_response: {:?}", get_response);
 
-        let response = client
+        client
             .put(
                 key.clone(),
                 value.clone(),
@@ -182,9 +195,13 @@ async fn test_cluster_put_get_with_existing_metadata_node_outside_preference_lis
             )
             .await
             .unwrap();
-
-        println!("DEBUG: {:?}", response);
     }
+
+    let client = &mut handles[0].1;
+    let get_response = client.get(key.clone(), false).await.unwrap();
+    let hex_decoded_metadata = hex::decode(get_response.metadata).unwrap();
+    let metadata = Metadata::deserialize(0, hex_decoded_metadata.into()).unwrap();
+    assert_eq!(metadata.versions.n_versions(), handles.len());
 
     stop_servers(handles).await;
 }
@@ -285,15 +302,5 @@ async fn test_cluster_get_no_quorum() {
         }
     }
 
-    stop_servers(handles).await;
-}
-
-#[tokio::test]
-async fn test_cluster_ping() {
-    let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
-
-    let resp = handles[0].1.ping().await.unwrap();
-
-    assert_eq!(resp.message, *"PONG");
     stop_servers(handles).await;
 }

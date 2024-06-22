@@ -9,7 +9,7 @@
     "partitioning_scheme": "consistent_hashing",
     "heartbeat": {
         "fanout": 10,
-        "interval": 100
+        "interval": 200
     }
 }
 
