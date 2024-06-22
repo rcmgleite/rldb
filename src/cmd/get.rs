@@ -6,7 +6,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::persistency::Db;
+use crate::persistency::{Db, Metadata};
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
@@ -61,10 +61,21 @@ impl IntoMessage for Get {
 }
 
 /// The struct that represents a [`Get`] response payload
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GetResponse {
     #[serde(with = "serde_utf8_bytes")]
     pub value: Bytes,
     /// A hex encoded representation of the object metadata
     pub metadata: String,
+}
+
+impl std::fmt::Debug for GetResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let meta =
+            Metadata::deserialize(0, hex::decode(self.metadata.clone()).unwrap().into()).unwrap();
+        f.debug_struct("GetResponse")
+            .field("value", &self.value)
+            .field("metadata", &meta)
+            .finish()
+    }
 }

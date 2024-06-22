@@ -14,17 +14,22 @@
 //!     Note: Node are never automatically removed from the cluster. This requires an operator to manually intervene.
 //!     The reason for that is that reshuffling partitions can be quite expensive (even when using schemes like consistent hashing).
 //!     So we deliberately chose to let an operator make that decision instead of having automatic detection.
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     client::{db_client::DbClientFactory, Client, Factory as ClientFactory},
     error::{Error, Result},
+    server::config::Heartbeat as HeartbeatConfig,
 };
 
 use super::state::{Node, State};
 use bytes::Bytes;
+use futures::{stream::FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
-use tracing::{event, Level};
+use tracing::{event, span, Instrument, Level};
 
 /// Struct that represents the deserialized payload used on [`crate::cmd::Command::Heartbeat`] command
 #[derive(Serialize, Deserialize)]
@@ -40,80 +45,73 @@ pub struct RingStateMessagePayload {
 /// 2. send a heartbeat message to the target node (which includes the current node view of the ring)
 /// 3. Receive a heartbeat response (ACK OR FAILURE)
 /// 4. loop forever picking a random node of the ring every X seconds and performing steps 2 through 3 again
-pub async fn start_heartbeat(cluster_state: Arc<State>) {
-    let mut cluster_connections = HashMap::new();
+pub async fn start_heartbeat(cluster_state: Arc<State>, config: HeartbeatConfig) {
+    let cluster_connections = Arc::new(Mutex::new(HashMap::new()));
 
     // Now we loop every X seconds to hearbeat to one node in the cluster
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        if let Err(err) = do_heartbeat(
+        tokio::time::sleep(tokio::time::Duration::from_millis(config.interval as u64)).await;
+
+        let span = span!(Level::DEBUG, "heartbeat_loop", addr=?cluster_state.own_addr());
+        do_heartbeat(
+            config.fanout,
             cluster_state.clone(),
-            Box::new(DbClientFactory),
-            &mut cluster_connections,
+            Arc::new(DbClientFactory),
+            cluster_connections.clone(),
         )
-        .await
-        {
-            match err {
-                Error::SingleNodeCluster => {
-                    event!(Level::DEBUG, "Skipping heartbeat to self");
-                }
-                _ => {
-                    event!(Level::WARN, "{}", err);
-                }
-            }
-        }
+        .instrument(span)
+        .await;
+
+        event!(Level::DEBUG, "heartbeat cycle finished {:?}", cluster_state);
     }
 }
 
 #[derive(Debug, PartialEq)]
 enum HeartbeatResult {
-    Skipped,
     Success,
 }
 
-async fn do_heartbeat(
+type ClusterConnectionsMap = Arc<Mutex<HashMap<Bytes, Box<dyn Client + Send>>>>;
+
+async fn do_heartbeat_to_node(
+    target_node: Node,
     cluster_state: Arc<State>,
-    client_factory: Box<dyn ClientFactory + Send>,
-    cluster_connections: &mut HashMap<Bytes, Box<dyn Client + Send>>,
+    client_factory: Arc<dyn ClientFactory + Send + Sync + 'static>,
+    cluster_connections: ClusterConnectionsMap,
 ) -> Result<HeartbeatResult> {
-    event!(Level::DEBUG, "heartbeat loop starting: {:?}", cluster_state);
-
-    // tick (ie: update your own state)
-    cluster_state.tick()?;
-
-    let target_node = match cluster_state.get_random_node() {
-        Ok(target_node) => target_node,
-        Err(err) => {
-            if let Error::SingleNodeCluster = err {
-                event!(Level::DEBUG, "skipping heatbeat to self");
-                return Ok(HeartbeatResult::Skipped);
-            }
-
-            return Err(err);
-        }
-    };
+    event!(Level::DEBUG, "heartbeating to node: {:?}", target_node);
 
     // let's re-use an exisiting connection if one exists.. otherwise create a new one
-    let client = if let Some(client) = cluster_connections.get_mut(&target_node.addr) {
+    let client = if let Some(client) = cluster_connections
+        .lock()
+        .unwrap()
+        .remove(&target_node.addr)
+    {
+        Some(client)
+    } else {
+        None
+    };
+
+    let mut client = if let Some(client) = client {
         client
     } else {
         let addr: String = String::from_utf8_lossy(&target_node.addr).into();
 
-        let client = match client_factory.get(addr).await {
+        match client_factory.get(addr).await {
             Ok(conn) => conn,
             Err(err) => {
-                if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node) {
-                    event!(Level::WARN, "Unable to mark node as offline: {}", err);
+                if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node.clone()) {
+                    event!(
+                        Level::WARN,
+                        "Unable to mark node {:?} as offline: {}",
+                        target_node.addr,
+                        err
+                    );
                 }
 
                 return Err(err.into());
             }
-        };
-
-        // cache the connection
-        cluster_connections.insert(target_node.addr.clone(), client);
-        // unwrap is unsafe because we just constructed this hashmap
-        cluster_connections.get_mut(&target_node.addr).unwrap()
+        }
     };
 
     let known_nodes = cluster_state.get_nodes()?;
@@ -121,12 +119,11 @@ async fn do_heartbeat(
     if let Err(err) = client.heartbeat(known_nodes).await {
         event!(
             Level::WARN,
-            "Unable to connect to node {:?} - err {:?}",
+            "Unable to heartbeat to node {:?} - err {:?}",
             target_node,
             err
         );
 
-        cluster_connections.remove(&target_node.addr);
         if let Err(err) = cluster_state.mark_node_as_possibly_offline(target_node) {
             // TODO: we are swallowing this error and only logging it.
             // this is a bit odd because we should never actually fail to mark a node as possibly offline (unless there's a logic issue in the code)
@@ -136,14 +133,74 @@ async fn do_heartbeat(
 
         Err(err.into())
     } else {
-        event!(Level::DEBUG, "heartbeat cycle finished {:?}", cluster_state);
+        event!(
+            Level::DEBUG,
+            "Successfully heartbeated to node {:?}",
+            target_node,
+        );
+        let mut guard = cluster_connections.lock().unwrap();
+        guard.insert(target_node.addr.clone(), client);
         Ok(HeartbeatResult::Success)
     }
 }
 
+async fn do_heartbeat(
+    fanout: usize,
+    cluster_state: Arc<State>,
+    client_factory: Arc<dyn ClientFactory + Send + Sync + 'static>,
+    cluster_connections: ClusterConnectionsMap,
+) -> Vec<Result<HeartbeatResult>> {
+    event!(Level::DEBUG, "heartbeat loop starting: {:?}", cluster_state);
+
+    // tick (ie: update your own state)
+    if let Err(err) = cluster_state.tick() {
+        event!(
+            Level::ERROR,
+            "Unable to call cluster_state.tick() - {}",
+            err
+        );
+
+        return vec![Err(err)];
+    }
+
+    let mut target_nodes = Vec::new();
+    for _ in 0..fanout {
+        match cluster_state.get_random_node() {
+            Ok(target_node) => target_nodes.push(target_node),
+            Err(err) => {
+                if let Error::SingleNodeCluster = err {
+                    event!(Level::DEBUG, "skipping heatbeat to self");
+                }
+
+                event!(Level::ERROR, "Unable to get node to heartbeat to: {}", err);
+            }
+        }
+    }
+
+    let mut heartbeats = FuturesUnordered::new();
+    for target_node in target_nodes {
+        heartbeats.push(do_heartbeat_to_node(
+            target_node,
+            cluster_state.clone(),
+            client_factory.clone(),
+            cluster_connections.clone(),
+        ));
+    }
+
+    let mut result = Vec::new();
+    while let Some(res) = heartbeats.next().await {
+        result.push(res)
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use crate::{
         client::{error::Error, mock::MockClientFactoryBuilder},
@@ -164,6 +221,7 @@ mod tests {
     ///  3. at the end, the cluster state contains 2 nodes(self and remote) both with NodeStatus::Ok and tick == 1
     #[tokio::test]
     async fn success() {
+        let fanout = 1;
         let own_addr = Bytes::from("fake addr");
         let state = Arc::new(
             State::new(
@@ -183,23 +241,24 @@ mod tests {
             }])
             .unwrap();
 
-        let mut cluster_connections = HashMap::new();
+        let cluster_connections = Arc::new(Mutex::new(HashMap::new()));
 
-        let res = do_heartbeat(
+        let mut res = do_heartbeat(
+            fanout,
             state.clone(),
-            Box::new(
+            Arc::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Never)
                     .with_heartbeat_fault(When::Never)
                     .build(),
             ),
-            &mut cluster_connections,
+            cluster_connections.clone(),
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert_eq!(res, HeartbeatResult::Success);
-        assert_eq!(cluster_connections.len(), 1);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res.remove(0).unwrap(), HeartbeatResult::Success);
+        assert_eq!(cluster_connections.lock().unwrap().len(), 1);
 
         let nodes = state.get_nodes().unwrap();
         assert_eq!(nodes.len(), 2);
@@ -225,6 +284,7 @@ mod tests {
     #[tokio::test]
     async fn skip_heartbeat_to_self() {
         let own_addr = Bytes::from("fake addr");
+        let fanout = 1;
         let state = Arc::new(
             State::new(
                 Box::new(MockPartitioningScheme::default()),
@@ -233,20 +293,18 @@ mod tests {
             )
             .unwrap(),
         );
-        let mut cluster_connections = HashMap::new();
+        let cluster_connections = Arc::new(Mutex::new(HashMap::new()));
 
-        assert_eq!(
-            do_heartbeat(
-                state.clone(),
-                Box::new(MockClientFactoryBuilder::new().without_faults().build()),
-                &mut cluster_connections
-            )
-            .await
-            .unwrap(),
-            HeartbeatResult::Skipped
-        );
+        let result = do_heartbeat(
+            fanout,
+            state.clone(),
+            Arc::new(MockClientFactoryBuilder::new().without_faults().build()),
+            cluster_connections.clone(),
+        )
+        .await;
+        assert_eq!(result.len(), 0);
 
-        assert_eq!(cluster_connections.len(), 0);
+        assert_eq!(cluster_connections.lock().unwrap().len(), 0);
         let nodes = state.get_nodes().unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].addr, own_addr);
@@ -280,20 +338,22 @@ mod tests {
             }])
             .unwrap();
 
-        let mut cluster_connections = HashMap::new();
+        let cluster_connections = Arc::new(Mutex::new(HashMap::new()));
 
-        let err = do_heartbeat(
+        let mut result = do_heartbeat(
+            1,
             state.clone(),
-            Box::new(
+            Arc::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Always)
                     .build(),
             ),
-            &mut cluster_connections,
+            cluster_connections.clone(),
         )
-        .await
-        .err()
-        .unwrap();
+        .await;
+
+        assert_eq!(result.len(), 1);
+        let err = result.remove(0).err().unwrap();
 
         match err {
             crate::error::Error::Client(Error::UnableToConnect { .. }) => {}
@@ -302,7 +362,7 @@ mod tests {
             }
         }
 
-        assert_eq!(cluster_connections.len(), 0);
+        assert_eq!(cluster_connections.lock().unwrap().len(), 0);
         let nodes = state.get_nodes().unwrap();
         assert_eq!(nodes.len(), 2);
         for node in nodes {
@@ -324,6 +384,7 @@ mod tests {
     #[tokio::test]
     async fn failure_on_heartbeat() {
         let own_addr = Bytes::from("fake addr");
+        let fanout = 1;
         let state = Arc::new(
             State::new(
                 Box::new(MockPartitioningScheme::default()),
@@ -342,21 +403,23 @@ mod tests {
             }])
             .unwrap();
 
-        let mut cluster_connections = HashMap::new();
+        let cluster_connections = Arc::new(Mutex::new(HashMap::new()));
 
-        let err = do_heartbeat(
+        let mut result = do_heartbeat(
+            fanout,
             state.clone(),
-            Box::new(
+            Arc::new(
                 MockClientFactoryBuilder::new()
                     .with_connection_fault(When::Never)
                     .with_heartbeat_fault(When::Always)
                     .build(),
             ),
-            &mut cluster_connections,
+            cluster_connections.clone(),
         )
-        .await
-        .err()
-        .unwrap();
+        .await;
+
+        assert_eq!(result.len(), 1);
+        let err = result.remove(0).err().unwrap();
 
         match err {
             crate::error::Error::Client(Error::Io { .. }) => {}
@@ -365,7 +428,7 @@ mod tests {
             }
         }
 
-        assert_eq!(cluster_connections.len(), 0);
+        assert_eq!(cluster_connections.lock().unwrap().len(), 0);
         let nodes = state.get_nodes().unwrap();
         assert_eq!(nodes.len(), 2);
         for node in nodes {

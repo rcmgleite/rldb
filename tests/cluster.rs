@@ -23,7 +23,7 @@ struct ServerHandle {
     client_listener_addr: String,
 }
 
-async fn start_servers(configs: Vec<PathBuf>) -> Vec<ServerHandle> {
+async fn start_servers(configs: Vec<PathBuf>) -> Vec<(ServerHandle, DbClient)> {
     let mut handles = Vec::new();
     for config in configs {
         let mut server = Server::from_config(config)
@@ -45,26 +45,52 @@ async fn start_servers(configs: Vec<PathBuf>) -> Vec<ServerHandle> {
         });
     }
 
-    handles
+    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
+    client.connect().await.unwrap();
+    for i in 1..handles.len() {
+        client
+            .join_cluster(handles[i].client_listener_addr.clone())
+            .await
+            .unwrap();
+    }
+
+    let mut clients = Vec::new();
+    for i in 0..handles.len() {
+        let mut client = DbClient::new(handles[i].client_listener_addr.clone());
+        client.connect().await.unwrap();
+
+        wait_cluster_ready(&mut client, handles.len()).await;
+        clients.push(client);
+    }
+
+    std::iter::zip(handles, clients).collect()
 }
 
 async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
     // loops until the cluster state is properly propageted through gossip
+    let sleep_for = tokio::time::Duration::from_millis(10);
     loop {
         let cluster_state = client.cluster_state().await.unwrap();
         if cluster_state.nodes.len() != n_nodes {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(sleep_for).await;
             continue;
         } else {
             for node in cluster_state.nodes {
                 if node.status != NodeStatus::Ok {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(sleep_for).await;
                     continue;
                 }
             }
 
             break;
         }
+    }
+}
+
+async fn stop_servers(handles: Vec<(ServerHandle, DbClient)>) {
+    for handle in handles {
+        drop(handle.0.shutdown);
+        handle.0.task_handle.await.unwrap();
     }
 }
 
@@ -77,22 +103,11 @@ async fn wait_cluster_ready(client: &mut DbClient, n_nodes: usize) {
 //  3. The version vector has to have a single (node/version) pair since each key is put only once
 #[tokio::test]
 async fn test_cluster_put_get_success() {
-    let handles = start_servers(vec![
+    let mut handles = start_servers(vec![
         "tests/conf/test_node_config.json".into();
         rand::thread_rng().gen_range(3..=10)
     ])
     .await;
-
-    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    client.connect().await.unwrap();
-    for i in 1..handles.len() {
-        client
-            .join_cluster(handles[i].client_listener_addr.clone())
-            .await
-            .unwrap();
-    }
-
-    wait_cluster_ready(&mut client, handles.len()).await;
 
     let mut used_keys = HashSet::new();
     for _ in 0..100 {
@@ -109,6 +124,7 @@ async fn test_cluster_put_get_success() {
         // the data stored doesn't matter.. what changes behavior is the key, hence only keys are randomized
         let value = Bytes::from("bar");
 
+        let client = &mut handles[0].1;
         let response = client
             .put(key.clone(), value.clone(), None, false)
             .await
@@ -126,34 +142,65 @@ async fn test_cluster_put_get_success() {
         assert_eq!(metadata.versions.n_versions(), 1);
     }
 
-    for handle in handles {
-        drop(handle.shutdown);
-        handle.task_handle.await.unwrap();
+    stop_servers(handles).await;
+}
+
+#[tokio::test]
+async fn test_cluster_put_get_with_existing_metadata_node_outside_preference_list() {
+    let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into(); 10]).await;
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    let key: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(20)
+        .map(char::from)
+        .collect();
+    let key: Bytes = key.into();
+
+    let value = Bytes::from("bar");
+
+    let client = &mut handles[0].1;
+    let response = client
+        .put(key.clone(), value.clone(), None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(response.message, "Ok".to_string());
+
+    for i in 1..handles.len() {
+        let client = &mut handles[i].1;
+        let get_response = client.get(key.clone(), false).await.unwrap();
+        println!("DEBUG: get_response: {:?}", get_response);
+
+        let response = client
+            .put(
+                key.clone(),
+                value.clone(),
+                Some(get_response.metadata),
+                false,
+            )
+            .await
+            .unwrap();
+
+        println!("DEBUG: {:?}", response);
     }
+
+    stop_servers(handles).await;
 }
 
 #[tokio::test]
 async fn test_cluster_key_not_found() {
-    let handles = start_servers(vec![
+    let mut handles = start_servers(vec![
         "tests/conf/test_node_config.json".into(),
         "tests/conf/test_node_config.json".into(),
         "tests/conf/test_node_config.json".into(),
     ])
     .await;
 
-    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    client.connect().await.unwrap();
-    for i in 1..handles.len() {
-        client
-            .join_cluster(handles[i].client_listener_addr.clone())
-            .await
-            .unwrap();
-    }
-
-    wait_cluster_ready(&mut client, handles.len()).await;
-
     let key = Bytes::from("foo");
 
+    let client = &mut handles[0].1;
     let err = client.get(key, false).await.err().unwrap();
 
     match err {
@@ -163,23 +210,18 @@ async fn test_cluster_key_not_found() {
         }
     }
 
-    for handle in handles {
-        drop(handle.shutdown);
-        handle.task_handle.await.unwrap();
-    }
+    stop_servers(handles).await;
 }
 
 #[tokio::test]
 async fn test_cluster_put_no_quorum() {
-    let handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
-
-    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    client.connect().await.unwrap();
+    let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
 
     let key = Bytes::from("foo");
     let value = Bytes::from("bar");
 
-    let err = client
+    let err = handles[0]
+        .1
         .put(key.clone(), value.clone(), None, false)
         .await
         .err()
@@ -197,10 +239,7 @@ async fn test_cluster_put_no_quorum() {
         }
     }
 
-    for handle in handles {
-        drop(handle.shutdown);
-        handle.task_handle.await.unwrap();
-    }
+    stop_servers(handles).await;
 }
 
 #[tokio::test]
@@ -212,34 +251,27 @@ async fn test_cluster_get_no_quorum() {
     ])
     .await;
 
-    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    client.connect().await.unwrap();
-    for i in 1..handles.len() {
-        client
-            .join_cluster(handles[i].client_listener_addr.clone())
-            .await
-            .unwrap();
-    }
-
-    wait_cluster_ready(&mut client, handles.len()).await;
-
     let key = Bytes::from("foo");
     let value = Bytes::from("bar");
 
-    let response = client
-        .put(key.clone(), value.clone(), None, false)
-        .await
-        .unwrap();
-    assert_eq!(response.message, "Ok".to_string());
+    {
+        let client = &mut handles[0].1;
+        let response = client
+            .put(key.clone(), value.clone(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(response.message, "Ok".to_string());
+    }
 
     // By stopping 2 nodes, we make it impossible for quorum to be reached
     let handle = handles.remove(1);
-    drop(handle.shutdown);
-    handle.task_handle.await.unwrap();
+    drop(handle.0.shutdown);
+    handle.0.task_handle.await.unwrap();
     let handle = handles.remove(1);
-    drop(handle.shutdown);
-    handle.task_handle.await.unwrap();
+    drop(handle.0.shutdown);
+    handle.0.task_handle.await.unwrap();
 
+    let client = &mut handles[0].1;
     let err = client.get(key, false).await.err().unwrap();
     match err {
         client::error::Error::QuorumNotReached {
@@ -253,20 +285,15 @@ async fn test_cluster_get_no_quorum() {
         }
     }
 
-    for handle in handles {
-        drop(handle.shutdown);
-        handle.task_handle.await.unwrap();
-    }
+    stop_servers(handles).await;
 }
 
 #[tokio::test]
 async fn test_cluster_ping() {
-    let handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
+    let mut handles = start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
 
-    let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    client.connect().await.unwrap();
-
-    let resp = client.ping().await.unwrap();
+    let resp = handles[0].1.ping().await.unwrap();
 
     assert_eq!(resp.message, *"PONG");
+    stop_servers(handles).await;
 }

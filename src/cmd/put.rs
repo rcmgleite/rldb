@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::{span, Instrument, Level};
 
 use crate::error::Result;
 use crate::persistency::Db;
@@ -47,7 +48,9 @@ impl Put {
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
+        let span = span!(Level::INFO, "persistency::put", key=?self.key);
         db.put(self.key, self.value, self.replication, self.metadata)
+            .instrument(span)
             .await?;
         Ok(PutResponse {
             message: "Ok".to_string(),

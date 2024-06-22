@@ -6,6 +6,10 @@
         "r": 2,
         "w": 2
     },
-    "partitioning_scheme": "consistent_hashing"
+    "partitioning_scheme": "consistent_hashing",
+    "heartbeat": {
+        "fanout": 2,
+        "interval": 500
+    }
 }
 

@@ -76,7 +76,7 @@ impl Server {
 
             // FIXME: There's a big problem here - if this task exists how will
             // the node know that it has to shutdown? Something to be fixed soon...
-            tokio::spawn(start_heartbeat(cluster_state.clone()));
+            tokio::spawn(start_heartbeat(cluster_state.clone(), config.heartbeat));
 
             let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
             Ok(Self {

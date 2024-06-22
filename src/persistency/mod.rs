@@ -233,7 +233,9 @@ impl Db {
             }
         } else {
             event!(Level::INFO, "Executing a coordinator Put");
-
+            // FIXME: There's a bug here - If the node acting as coordinator is not part of the preference list
+            // or it simply doesn't have the given key for any reason, the metadata check is worthless and a lot
+            // of conflicts would arise on the nodes that are indeed part of the preference list
             let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
             let mut metadata = if let Some(metadata) = metadata {
                 Metadata::deserialize(self.own_state.pid(), metadata)?
@@ -254,6 +256,11 @@ impl Db {
             if let Some(existing_metadata_for_key) = existing_metadata_for_key {
                 let existing_metadata_for_key =
                     Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
+                event!(
+                    Level::INFO,
+                    "found existing metadata: {:?}",
+                    existing_metadata_for_key
+                );
                 match metadata_evaluation(&metadata, &existing_metadata_for_key)? {
                     MetadataEvaluation::Conflict => {
                         return Err(Error::Internal(crate::error::Internal::Unknown {
@@ -276,6 +283,7 @@ impl Db {
             // the preference list will contain the node itself (otherwise there's a bug).
             // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
             let preference_list = self.preference_list(&key)?;
+            event!(Level::INFO, "preference_list: {:?}", preference_list);
             for node in preference_list {
                 futures.push(self.do_put(key.clone(), value.clone(), metadata.clone(), node))
             }
@@ -304,9 +312,9 @@ impl Db {
                 Evaluation::NotReached | Evaluation::Unreachable => {
                     event!(
                         Level::WARN,
-                        "quorum not reached: successes: {}, failures: {}",
+                        "quorum not reached: successes: {}, failures: {:?}",
                         quorum_result.successes.len(),
-                        quorum_result.failures.len(),
+                        quorum_result.failures,
                     );
                     return Err(Error::QuorumNotReached {
                         operation: "Put".to_string(),
