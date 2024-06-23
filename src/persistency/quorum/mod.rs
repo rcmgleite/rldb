@@ -12,9 +12,12 @@ use crate::error::Result;
 ///  an array of Vec<T, usize> where usize is how many times the given value was received
 /// Note 2: The API could be a bit nicer if we always returned the failures (might be useful for logging?)
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Evaluation {
+pub enum Evaluation<T> {
     /// Quorum was reached
-    Reached,
+    /// Note that this returns the value which met quorum. This means that a user of this interface
+    /// is able to stop the quorum checking process and proceed without calling [`Quorum::finish`] if they want to.
+    /// This is especially useful when the workflow already met quorum but other operations are still inflight
+    Reached(T),
     /// Quorum was not reached yet but may reached be in the future
     NotReached,
     /// Given the current state, it's impossible to reach quorum no matter how many more operations succeed
@@ -25,9 +28,7 @@ pub enum Evaluation {
 #[derive(Debug)]
 pub struct QuorumResult<T, E> {
     /// The quorum evaluation - see [`Evaluation`]
-    pub evaluation: Evaluation,
-    /// successful items
-    pub successes: Vec<T>,
+    pub evaluation: Evaluation<T>,
     /// failed items
     pub failures: Vec<E>,
     /// total number of items that can be dealt with by this Quorum implementation
@@ -43,7 +44,7 @@ pub enum OperationStatus<T, E> {
 /// Trait that defines the Quorum interface.
 pub trait Quorum<T, E: std::error::Error> {
     /// Updates the Quorum internal state with either a success or a failure
-    fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation>;
+    fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation<T>>;
 
     /// Returns Ok if the quorum was met or an Error otherwise
     fn finish(self) -> QuorumResult<T, E>;

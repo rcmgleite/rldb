@@ -339,13 +339,13 @@ impl Db {
             let quorum_result = quorum.finish();
 
             match quorum_result.evaluation {
-                Evaluation::Reached => {}
+                Evaluation::Reached(_) => {}
                 Evaluation::NotReached | Evaluation::Unreachable => {
                     event!(
                         Level::WARN,
-                        "quorum not reached: successes: {}, failures: {:?}",
-                        quorum_result.successes.len(),
+                        "quorum not reached: failures: {:?} out of {}",
                         quorum_result.failures,
+                        quorum_result.total
                     );
                     return Err(Error::QuorumNotReached {
                         operation: "Put".to_string(),
@@ -473,7 +473,7 @@ impl Db {
             let quorum_result = quorum.finish();
             event!(Level::ERROR, "Get quorum result: {:?}", quorum_result);
             match quorum_result.evaluation {
-                Evaluation::Reached => Ok(quorum_result.successes[0].clone()),
+                Evaluation::Reached(value) => Ok(value),
                 Evaluation::NotReached | Evaluation::Unreachable => {
                     if quorum_result.failures.iter().all(|err| err.is_not_found()) {
                         return Err(Error::NotFound { key: key.clone() });

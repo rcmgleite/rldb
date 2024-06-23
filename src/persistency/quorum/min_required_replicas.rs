@@ -23,11 +23,12 @@ pub struct MinRequiredReplicas<T, E> {
     required_successes: usize,
     /// hashmap containing the frequencies which each T value happened
     successes: HashMap<T, usize>,
+    /// which T has the most successes
     highest_success_count_per_value: Option<(T, usize)>,
     /// tracks all failures received
     failures: Vec<E>,
     /// Current state of this quorum instance
-    current_state: Evaluation,
+    current_state: Evaluation<T>,
 }
 
 impl<T, E> MinRequiredReplicas<T, E> {
@@ -36,6 +37,15 @@ impl<T, E> MinRequiredReplicas<T, E> {
     /// # Error
     /// This function returns an error if the provided `n_replicas` arugment is less than `required_successes`
     pub fn new(n_replicas: usize, required_successes: usize) -> Result<Self> {
+        if required_successes < 1 {
+            return Err(Error::Logic {
+                reason: format!(
+                    "required_success has to be greated than 1. got{}",
+                    required_successes
+                ),
+            });
+        }
+
         if n_replicas < required_successes {
             return Err(Error::Logic {
                 reason: format!(
@@ -60,7 +70,7 @@ impl<T, E> MinRequiredReplicas<T, E> {
 /// Note: T is now required to be clone. We expect this clone operation to be cheap (eg: calling clone on [`bytes::Bytes`]),
 /// otherwise this operation can get very expensive
 impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T, E> {
-    fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation> {
+    fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation<T>> {
         if self.remaining_replicas == 0 {
             return Err(Error::Logic { reason: "Calling `update` on MinRequiredReplicas Quorum more times than the total number of replicas. This is a bug".to_string() });
         }
@@ -95,7 +105,7 @@ impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredRep
 
         // no point trying to evaluate again given the quorum is already unreachable
         if self.current_state == Evaluation::Unreachable {
-            return Ok(self.current_state);
+            return Ok(self.current_state.clone());
         }
 
         let highest_success_count_per_value = self
@@ -103,9 +113,12 @@ impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredRep
             .as_ref()
             .map(|e| e.1)
             .unwrap_or_default();
+        let highest_success_value = self.highest_success_count_per_value.clone().map(|e| e.0);
 
         self.current_state = if highest_success_count_per_value >= self.required_successes {
-            Evaluation::Reached
+            // unwrap is safe because of the restriction during construction of this instance where
+            // required_successes has to be higher than 0
+            Evaluation::Reached(highest_success_value.unwrap())
         } else if self.remaining_replicas + highest_success_count_per_value
             < self.required_successes
         {
@@ -114,28 +127,12 @@ impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredRep
             Evaluation::NotReached
         };
 
-        Ok(self.current_state)
+        Ok(self.current_state.clone())
     }
 
-    /// FIXME: This API is still not great...
-    /// The goal is to have more visibility on what caused the error in the first place...
     fn finish(self) -> QuorumResult<T, E> {
         QuorumResult {
             evaluation: self.current_state,
-            successes: self
-                .successes
-                .into_iter()
-                .map(|(k, v)| {
-                    if let Some(h) = &self.highest_success_count_per_value {
-                        if k == h.0 {
-                            return vec![k; v];
-                        }
-                    }
-
-                    Vec::new()
-                })
-                .flatten()
-                .collect(),
             failures: self.failures,
             total: self.total_replicas,
         }
@@ -160,7 +157,7 @@ mod tests {
         );
         assert_eq!(
             q.update(OperationStatus::Success(())).unwrap(),
-            Evaluation::Reached
+            Evaluation::Reached(())
         );
 
         // even after the quorum is reached, there's nothing that prevents a client from calling update again.
@@ -169,12 +166,11 @@ mod tests {
                 reason: "fake".to_string(),
             }))
             .unwrap(),
-            Evaluation::Reached
+            Evaluation::Reached(())
         );
 
         let quorum_result = q.finish();
-        assert_eq!(quorum_result.evaluation, Evaluation::Reached);
-        assert_eq!(quorum_result.successes.len(), 2);
+        assert_eq!(quorum_result.evaluation, Evaluation::Reached(()));
         assert_eq!(quorum_result.failures.len(), 1);
     }
 
@@ -207,7 +203,6 @@ mod tests {
 
         let quorum_result = q.finish();
         assert_eq!(quorum_result.evaluation, Evaluation::Unreachable);
-        assert!(quorum_result.successes.is_empty());
         assert_eq!(quorum_result.failures.len(), 3);
     }
 
@@ -231,11 +226,11 @@ mod tests {
         );
         assert_eq!(
             q.update(OperationStatus::Success(())).unwrap(),
-            Evaluation::Reached
+            Evaluation::Reached(())
         );
         assert_eq!(
             q.update(OperationStatus::Success(())).unwrap(),
-            Evaluation::Reached
+            Evaluation::Reached(())
         );
 
         let err = q.update(OperationStatus::Success(())).err().unwrap();
