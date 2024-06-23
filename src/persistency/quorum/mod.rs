@@ -30,6 +30,8 @@ pub struct QuorumResult<T, E> {
     pub successes: Vec<T>,
     /// failed items
     pub failures: Vec<E>,
+    /// total number of items that can be dealt with by this Quorum implementation
+    pub total: usize,
 }
 
 /// Argument passed to the [`Quorum::update`] function to mark an operation as either a Success or a Failure

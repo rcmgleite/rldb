@@ -7,20 +7,23 @@
 //!
 //! Note that the number of calls to [`Quorum::update`] is bound by the [`MinRequiredReplicas::new`] n_replicas argument.
 //! If you call update more than n_replicas times an error will be returned.
+use std::{collections::HashMap, hash::Hash};
+
 use super::{Evaluation, OperationStatus, Quorum, QuorumResult};
 use crate::error::{Error, Result};
-use std::hash::Hash;
 
 /// Definition of a MinRequiredReplicas [`Quorum`] type
 #[derive(Debug)]
 pub struct MinRequiredReplicas<T, E> {
+    total_replicas: usize,
     /// Number of replicas that were not yet evaluated. This is initially set to the total number of replicas
     /// that exist
     remaining_replicas: usize,
     /// number of replicas that need to succeed in order for the quorum to me met
     required_successes: usize,
     /// hashmap containing the frequencies which each T value happened
-    successes: Vec<T>,
+    successes: HashMap<T, usize>,
+    highest_success_count_per_value: Option<(T, usize)>,
     /// tracks all failures received
     failures: Vec<E>,
     /// Current state of this quorum instance
@@ -43,8 +46,10 @@ impl<T, E> MinRequiredReplicas<T, E> {
         }
 
         Ok(Self {
+            total_replicas: n_replicas,
             remaining_replicas: n_replicas,
             required_successes,
+            highest_success_count_per_value: None,
             successes: Default::default(),
             failures: Default::default(),
             current_state: Evaluation::NotReached,
@@ -52,7 +57,9 @@ impl<T, E> MinRequiredReplicas<T, E> {
     }
 }
 
-impl<T: Eq + Hash, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T, E> {
+/// Note: T is now required to be clone. We expect this clone operation to be cheap (eg: calling clone on [`bytes::Bytes`]),
+/// otherwise this operation can get very expensive
+impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T, E> {
     fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation> {
         if self.remaining_replicas == 0 {
             return Err(Error::Logic { reason: "Calling `update` on MinRequiredReplicas Quorum more times than the total number of replicas. This is a bug".to_string() });
@@ -60,7 +67,24 @@ impl<T: Eq + Hash, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T,
 
         match operation_status {
             OperationStatus::Success(item) => {
-                self.successes.push(item);
+                {
+                    let entry = self.successes.entry(item.clone()).or_insert(0);
+                    *entry += 1;
+                }
+
+                for s in self.successes.iter() {
+                    match &self.highest_success_count_per_value {
+                        Some(highest_success_count_per_value) => {
+                            self.highest_success_count_per_value = Some((
+                                highest_success_count_per_value.0.clone(),
+                                std::cmp::max(highest_success_count_per_value.1, *s.1),
+                            ));
+                        }
+                        None => {
+                            self.highest_success_count_per_value = Some((s.0.clone(), *s.1));
+                        }
+                    }
+                }
             }
             OperationStatus::Failure(err) => {
                 self.failures.push(err);
@@ -74,9 +98,17 @@ impl<T: Eq + Hash, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T,
             return Ok(self.current_state);
         }
 
-        self.current_state = if self.successes.len() >= self.required_successes {
+        let highest_success_count_per_value = self
+            .highest_success_count_per_value
+            .as_ref()
+            .map(|e| e.1)
+            .unwrap_or_default();
+
+        self.current_state = if highest_success_count_per_value >= self.required_successes {
             Evaluation::Reached
-        } else if self.remaining_replicas + self.successes.len() < self.required_successes {
+        } else if self.remaining_replicas + highest_success_count_per_value
+            < self.required_successes
+        {
             Evaluation::Unreachable
         } else {
             Evaluation::NotReached
@@ -85,11 +117,27 @@ impl<T: Eq + Hash, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T,
         Ok(self.current_state)
     }
 
+    /// FIXME: This API is still not great...
+    /// The goal is to have more visibility on what caused the error in the first place...
     fn finish(self) -> QuorumResult<T, E> {
         QuorumResult {
             evaluation: self.current_state,
-            successes: self.successes,
+            successes: self
+                .successes
+                .into_iter()
+                .map(|(k, v)| {
+                    if let Some(h) = &self.highest_success_count_per_value {
+                        if k == h.0 {
+                            return vec![k; v];
+                        }
+                    }
+
+                    Vec::new()
+                })
+                .flatten()
+                .collect(),
             failures: self.failures,
+            total: self.total_replicas,
         }
     }
 }

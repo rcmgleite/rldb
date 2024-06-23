@@ -170,7 +170,7 @@ async fn test_cluster_put_get_success() {
 //  2. Every node of the cluster will accept a PUT once - the caveat here is: Only quorum_config.replica nodes
 //   will actually act as coordinators. So we always have to assert for this specific case and NOT all nodes
 #[tokio::test]
-async fn test_cluster_update_key_using_every_node_as_coorinator_once() {
+async fn test_cluster_update_key_using_every_node_as_proxy_once() {
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 10]).await;
 
@@ -224,6 +224,7 @@ async fn test_cluster_update_key_using_every_node_as_coorinator_once() {
 /// FIXME: it's very likely that this test will be flaky...
 #[tokio::test]
 async fn test_cluster_update_key_concurrently() {
+    tracing_subscriber::fmt::init();
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 20]).await;
 
@@ -254,7 +255,13 @@ async fn test_cluster_update_key_concurrently() {
 
     let saw_failure = Arc::new(Mutex::new(ErrorsSeen::default()));
     for _ in 0..clients.len() {
-        let value = value.clone();
+        // add random string as value so that we can assert on the final value PUT at the end
+        let value: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect();
+        let value: Bytes = value.into();
         let key = key.clone();
         let saw_failure = saw_failure.clone();
         let mut client = clients.remove(0);
@@ -278,7 +285,6 @@ async fn test_cluster_update_key_concurrently() {
                     } => {
                         assert_eq!(operation, *"Put");
                         for err in errors {
-                            println!("DEBUG, {:?}", err);
                             match err {
                                 ServerError::Client(ClientError::Internal(
                                     error::Internal::Unknown { reason },
@@ -307,21 +313,88 @@ async fn test_cluster_update_key_concurrently() {
         }));
     }
 
-    // create a new client since the others were consumed by the task
-    // let mut client = DbClient::new(handles[0].client_listener_addr.clone());
-    // client.connect().await.unwrap();
-
-    // let get_response = client.get(key.clone(), false).await.unwrap();
-    // let hex_decoded_metadata = hex::decode(get_response.metadata).unwrap();
-    // let metadata = Metadata::deserialize(0, hex_decoded_metadata.into()).unwrap();
-    // assert_eq!(metadata.versions.n_versions(), handles.len());
-
     for client_handle in client_handles {
         client_handle.await.unwrap();
     }
 
+    // finally, since we are not allowing sloppy quorums and this test is configured for strong consistency (r: 2, w:2 n: 3), every
+    // node that we use to query should return the same data.
+    let mut returned_values = HashSet::new();
+    for i in 0..handles.len() {
+        let mut client = DbClient::new(handles[i].client_listener_addr.clone());
+        client.connect().await.unwrap();
+
+        let get_result = client.get(key.clone(), false).await.unwrap();
+        returned_values.insert(get_result.value);
+    }
+
+    println!("DEBUG: {:?}", returned_values);
+    assert_eq!(returned_values.len(), 1);
+
     assert!(saw_failure.lock().unwrap().conflict > 0);
     assert!(saw_failure.lock().unwrap().stale_context > 0);
+    stop_servers(handles).await;
+}
+
+#[tokio::test]
+async fn test_cluster_stale_context_provided() {
+    let (handles, mut clients) =
+        start_servers(vec!["tests/conf/test_node_config.json".into(); 3]).await;
+
+    let key: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(20)
+        .map(char::from)
+        .collect();
+    let key: Bytes = key.into();
+
+    let value_for_first_put = Bytes::from("First Put");
+
+    let client = &mut clients[0];
+    let response = client
+        .put(key.clone(), value_for_first_put.clone(), None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(response.message, "Ok".to_string());
+    let first_get_response = client.get(key.clone(), false).await.unwrap();
+    assert_eq!(first_get_response.value, value_for_first_put);
+
+    let value_for_second_put = Bytes::from("Second Put");
+    client
+        .put(
+            key.clone(),
+            value_for_second_put.clone(),
+            Some(first_get_response.metadata.clone()),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let second_get_response = client.get(key.clone(), false).await.unwrap();
+    assert_eq!(second_get_response.value, value_for_second_put);
+
+    // now we try a third update with the first_get_resposne metadata - this must fail
+    let value_for_third_put = Bytes::from("Third Put");
+    let err = client
+        .put(
+            key.clone(),
+            value_for_third_put.clone(),
+            Some(first_get_response.metadata),
+            false,
+        )
+        .await
+        .err()
+        .unwrap();
+
+    assert!(matches!(
+        err,
+        ClientError::InvalidRequest(InvalidRequest::StaleContextProvided)
+    ));
+
+    let final_get_result = client.get(key, false).await.unwrap();
+    assert_eq!(final_get_result.value, value_for_second_put);
+
     stop_servers(handles).await;
 }
 

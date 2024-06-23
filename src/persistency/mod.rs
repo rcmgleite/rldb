@@ -471,6 +471,7 @@ impl Db {
             event!(Level::DEBUG, "quorum: {:?}", quorum);
 
             let quorum_result = quorum.finish();
+            event!(Level::ERROR, "Get quorum result: {:?}", quorum_result);
             match quorum_result.evaluation {
                 Evaluation::Reached => Ok(quorum_result.successes[0].clone()),
                 Evaluation::NotReached | Evaluation::Unreachable => {
