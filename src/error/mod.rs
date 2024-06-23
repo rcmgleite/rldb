@@ -3,14 +3,14 @@
 use std::fmt::Display;
 
 use bytes::Bytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::utils::serde_utf8_bytes;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Error enum with all possible variants
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Error {
     NotFound {
         #[serde(with = "serde_utf8_bytes")]
@@ -30,6 +30,7 @@ pub enum Error {
     QuorumNotReached {
         operation: String,
         reason: String,
+        errors: Vec<Error>,
     },
     Logic {
         reason: String,
@@ -71,19 +72,20 @@ impl From<crate::client::error::Error> for Error {
     fn from(err: crate::client::error::Error) -> Self {
         match err {
             crate::client::error::Error::NotFound { key } => Self::NotFound { key },
+            crate::client::error::Error::InvalidRequest(err) => Self::InvalidRequest(err),
             _ => Self::Client(err),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Internal {
     Logic { reason: String },
     Unknown { reason: String },
     StorageEngine(crate::storage_engine::Error),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum InvalidRequest {
     Generic { reason: String },
     MaxMessageSizeExceeded { max: usize, got: usize },

@@ -1,4 +1,7 @@
-use crate::utils::serde_utf8_bytes;
+use crate::{
+    error::{Internal, InvalidRequest},
+    utils::serde_utf8_bytes,
+};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -11,11 +14,17 @@ pub enum Error {
     /// Variant returned when a client was unable to establish a tcp connection with an rldb node
     UnableToConnect { reason: String },
     /// Server telling the client that the request sent is invalid for some reason
-    InvalidRequest { reason: String },
+    InvalidRequest(InvalidRequest),
     /// Variant returned if the client was unable to interpret the server response
     InvalidServerResponse { reason: String },
     /// Variant returned when either PUT or GET quorums are not met
-    QuorumNotReached { operation: String, reason: String },
+    QuorumNotReached {
+        operation: String,
+        reason: String,
+        // FIXME: Error handling is still very poor between Server and Client.. Will have to invest in better
+        // tests for error cases and less code duplication between [`crate::error::Error`] and [`Error`]
+        errors: Vec<crate::error::Error>,
+    },
     /// Error for GET requests when the key doesn't exist
     NotFound {
         #[serde(with = "serde_utf8_bytes")]
@@ -27,6 +36,8 @@ pub enum Error {
     Generic { reason: String },
     /// Tells the user of the Client library that it did something wrong (like calling connect twice)
     Logic { reason: String },
+    /// Internal server error - currently exposes more than it should to the client... but makes easier to write tests..
+    Internal(Internal),
 }
 
 impl std::fmt::Display for Error {

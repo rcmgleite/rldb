@@ -246,9 +246,11 @@ impl State {
         Ok(self.own_addr == self.key_owner(key)?.addr)
     }
 
-    pub fn preference_list(&self, key: &[u8], list_size: usize) -> Result<Vec<Bytes>> {
+    pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
         let guard = self.acquire_lock()?;
-        guard.partitioning_scheme.preference_list(key, list_size)
+        guard
+            .partitioning_scheme
+            .preference_list(key, self.quorum_config.replicas)
     }
 }
 

@@ -16,7 +16,7 @@ pub mod versioning;
 use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
-    error::{Error, InvalidRequest, Result},
+    error::{Error, Internal, InvalidRequest, Result},
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 
@@ -119,6 +119,7 @@ fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluat
             // This can happen due to read repair and active anti-entropy processes for instance.
             // We return an error here to make sure the client knows the put was rejected and does not expect
             // the value passed in this request to be stored
+            event!(Level::WARN, "StaleContextProvided");
             Err(Error::InvalidRequest(InvalidRequest::StaleContextProvided))
         }
         VersionVectorOrd::HappenedAfter => {
@@ -195,8 +196,18 @@ impl Db {
         replication: bool,
         metadata: Option<Bytes>,
     ) -> Result<()> {
+        let preference_list = self.cluster_state.preference_list(&key)?;
         if replication {
             event!(Level::INFO, "Executing a replication Put");
+            if !preference_list.contains(&self.cluster_state.own_addr()) {
+                return Err(Error::Internal(Internal::Logic {
+                    reason: format!(
+                        "Node {:?} Received a replication PUT for a key that it doesn't own",
+                        self.cluster_state.own_addr()
+                    ),
+                }));
+            }
+
             // if this is a replication PUT, we don't have to deal with quorum
             if let Some(metadata) = metadata {
                 let existing_metadata_for_key = self.metadata_engine.get(&key).await?;
@@ -231,6 +242,31 @@ impl Db {
                     InvalidRequest::ReplicationPutMustIncludeContext,
                 ));
             }
+        } else if !preference_list.contains(&self.cluster_state.own_addr()) {
+            let dst_node = preference_list[0].clone();
+            event!(
+                Level::INFO,
+                "Executing a forward proxy PUT to node: {:?}",
+                dst_node
+            );
+            // let's just forward the PUT (not as replication) to a node that is part of the preference list
+            let mut client = self
+                .client_factory
+                .get(String::from_utf8(dst_node.into()).map_err(|e| {
+                    event!(
+                        Level::ERROR,
+                        "Unable to parse addr as utf8 {}",
+                        e.to_string()
+                    );
+                    Error::Internal(crate::error::Internal::Unknown {
+                        reason: e.to_string(),
+                    })
+                })?)
+                .await?;
+
+            let _ = client
+                .put(key.clone(), value, metadata.map(hex::encode), false)
+                .await?;
         } else {
             event!(Level::INFO, "Executing a coordinator Put");
             // FIXME: There's a bug here - If the node acting as coordinator is not part of the preference list
@@ -256,11 +292,6 @@ impl Db {
             if let Some(existing_metadata_for_key) = existing_metadata_for_key {
                 let existing_metadata_for_key =
                     Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
-                event!(
-                    Level::INFO,
-                    "found existing metadata: {:?}",
-                    existing_metadata_for_key
-                );
                 match metadata_evaluation(&metadata, &existing_metadata_for_key)? {
                     MetadataEvaluation::Conflict => {
                         return Err(Error::Internal(crate::error::Internal::Unknown {
@@ -319,6 +350,7 @@ impl Db {
                     return Err(Error::QuorumNotReached {
                         operation: "Put".to_string(),
                         reason: format!("Unable to execute a min of {} PUTs", quorum_config.writes),
+                        errors: quorum_result.failures,
                     });
                 }
             }
@@ -452,6 +484,7 @@ impl Db {
                             "Unable to execute {} successful GETs",
                             quorum_config.reads
                         ),
+                        errors: quorum_result.failures,
                     })
                 }
             }
@@ -517,8 +550,7 @@ impl Db {
     }
 
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
-        self.cluster_state
-            .preference_list(key, self.cluster_state.quorum_config().replicas)
+        self.cluster_state.preference_list(key)
     }
 
     pub fn cluster_state(&self) -> Result<Vec<ClusterNode>> {

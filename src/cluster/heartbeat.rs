@@ -81,16 +81,10 @@ async fn do_heartbeat_to_node(
 ) -> Result<HeartbeatResult> {
     event!(Level::DEBUG, "heartbeating to node: {:?}", target_node);
 
-    // let's re-use an exisiting connection if one exists.. otherwise create a new one
-    let client = if let Some(client) = cluster_connections
+    let client = cluster_connections
         .lock()
         .unwrap()
-        .remove(&target_node.addr)
-    {
-        Some(client)
-    } else {
-        None
-    };
+        .remove(&target_node.addr);
 
     let mut client = if let Some(client) = client {
         client

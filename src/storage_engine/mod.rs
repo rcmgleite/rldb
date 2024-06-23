@@ -2,7 +2,7 @@
 //! Keys and values are opaque bytes and are not interpreted in any way by StorageEngine implementations
 use async_trait::async_trait;
 use bytes::Bytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 pub mod in_memory;
@@ -25,7 +25,7 @@ pub trait StorageEngine: Debug {
 }
 
 /// A concrete [`std::error::Error`] type for [`StorageEngine`] operations
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Error {
     /// Some unknown internal issue that should not be transparant to client
     Internal,
