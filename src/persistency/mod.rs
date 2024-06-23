@@ -562,6 +562,7 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use rand::{distributions::Alphanumeric, Rng};
     use std::sync::Arc;
 
     use crate::{
@@ -861,6 +862,116 @@ mod tests {
             Error::InvalidRequest(InvalidRequest::StaleContextProvided) => {}
             _ => {
                 panic!("Unexpected err: {}", err);
+            }
+        }
+    }
+
+    // This is a very specific regression test. At commit https://github.com/rcmgleite/rldb/commit/8fd3edd4c5a8234a5994c352877a447c0c502bed
+    // we introduced a separate [`StorageEngine`] for data and metadata. The implementation created a race condition
+    // since on a PUT request, we were
+    //  1. reading local metadata to check for conflicts
+    //  2. update metadata as required
+    // in a non-atomic way. when we have concurrency, if 2 clients try to write at the same time
+    // and for any reason they both read the metadata at the same time, only one of them will actually have its
+    // correct value stored
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn regression_test_db_concurrent_puts() {
+        for _ in 0..100 {
+            let (_, db) = initialize_state();
+            let key: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(20)
+                .map(char::from)
+                .collect();
+            let key: Bytes = key.into();
+
+            let first_value = Bytes::from("a value");
+            let replication = false;
+
+            db.put(key.clone(), first_value.clone(), replication, None)
+                .await
+                .unwrap();
+
+            let (first_get_metadata, first_get_data) =
+                db.get(key.clone(), replication).await.unwrap().unwrap();
+
+            assert_eq!(first_get_data, first_value);
+
+            // let self_pid = process_id(&local_addr);
+
+            enum PutResult {
+                Success,
+                Failure(Error),
+            }
+
+            let c1_value = Bytes::from("c1_value");
+            let c2_value = Bytes::from("c2_value");
+            let c1_handle = {
+                let db = db.clone();
+                let key = key.clone();
+                let first_get_metadata = first_get_metadata.clone();
+                let c1_value = c1_value.clone();
+                tokio::spawn(async move {
+                    match db
+                        .put(
+                            key.clone(),
+                            c1_value.clone(),
+                            replication,
+                            Some(first_get_metadata),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            let get_result = db.get(key, false).await.unwrap().unwrap();
+                            assert_eq!(get_result.1, c1_value);
+                            PutResult::Success
+                        }
+                        Err(err) => PutResult::Failure(err),
+                    }
+                })
+            };
+
+            let c2_handle = {
+                let db = db.clone();
+                let key = key.clone();
+                let first_get_metadata = first_get_metadata.clone();
+                let c2_value = c2_value.clone();
+                tokio::spawn(async move {
+                    match db
+                        .put(
+                            key.clone(),
+                            c2_value.clone(),
+                            replication,
+                            Some(first_get_metadata),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            let get_result = db.get(key, false).await.unwrap().unwrap();
+                            assert_eq!(get_result.1, c2_value);
+                            PutResult::Success
+                        }
+                        Err(err) => PutResult::Failure(err),
+                    }
+                })
+            };
+
+            let c1_res = c1_handle.await.unwrap();
+            let c2_res = c2_handle.await.unwrap();
+            match (c1_res, c2_res) {
+                (PutResult::Success, PutResult::Success) => {
+                    panic!("If both puts succeeded, we have a bug");
+                }
+                (PutResult::Failure(err1), PutResult::Failure(err2)) => {
+                    panic!(
+                        "Both Puts failed. should never happen: err1: {:?}, err2: {:?}",
+                        err1, err2
+                    );
+                }
+                (PutResult::Success, PutResult::Failure(_))
+                | (PutResult::Failure(_), PutResult::Success) => {
+                    // expected result
+                }
             }
         }
     }

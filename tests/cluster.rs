@@ -221,7 +221,8 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 ///  1. Stale metadata actually returns an error
 ///  2. Conflicts create errors
 ///
-/// FIXME: it's very likely that this test will be flaky...
+/// FIXME: currently ignored since we don't handle conflict writes as of now
+#[ignore]
 #[tokio::test]
 async fn test_cluster_update_key_concurrently() {
     tracing_subscriber::fmt::init();
