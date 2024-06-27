@@ -2,7 +2,7 @@
 //!
 //! Still not sure if these APIs are exactly what a version vector should provide..
 //! This is what I understood from the papares on VersionVector implementations
-use std::{collections::HashMap, mem::size_of};
+use std::{collections::BTreeMap, mem::size_of};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
@@ -31,7 +31,9 @@ pub enum VersionVectorOrd {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VersionVector {
     id: ProcessId,
-    versions: HashMap<ProcessId, Version>,
+    // using a BtreeMap simply to make sure that the serialization of this structure into binary format
+    // is consistent
+    versions: BTreeMap<ProcessId, Version>,
 }
 
 impl VersionVector {
@@ -143,7 +145,7 @@ impl VersionVector {
                     "buffer provided to deserialize into VersionVector has the wrong size. Expected {}, got {}",  expected_size, serialized_vv.len())}));
         }
 
-        let mut versions = HashMap::with_capacity(n_items);
+        let mut versions = BTreeMap::new();
         for _ in 0..n_items {
             let pid = serialized_vv.get_u128();
             let version = serialized_vv.get_u128();

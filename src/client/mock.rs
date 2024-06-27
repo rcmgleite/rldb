@@ -12,7 +12,7 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
     },
-    persistency::{versioning::version_vector::VersionVector, Metadata},
+    persistency::{metadata_evaluation, Metadata, MetadataEvaluation},
     storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
 };
@@ -23,6 +23,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::{error::Error, error::Result, Client, Factory as ClientFactory};
 
@@ -49,21 +50,29 @@ pub struct MockClientFaults {
 pub struct MockClient {
     pub faults: MockClientFaults,
     pub stats: MockClientStats,
-    pub storage_engine: StorageEngineType,
-    pub metadata_engine: StorageEngineType,
+    pub storage: Arc<AsyncMutex<Storage>>,
+}
+
+#[derive(Debug)]
+pub struct Storage {
+    storage_engine: StorageEngineType,
+    metadata_engine: StorageEngineType,
 }
 
 impl MockClient {
     pub fn new(
         faults: MockClientFaults,
+
         storage_engine: StorageEngineType,
         metadata_engine: StorageEngineType,
     ) -> Self {
         Self {
             faults,
             stats: Default::default(),
-            storage_engine,
-            metadata_engine,
+            storage: Arc::new(AsyncMutex::new(Storage {
+                storage_engine,
+                metadata_engine,
+            })),
         }
     }
 }
@@ -89,8 +98,9 @@ impl Client for MockClient {
         todo!()
     }
     async fn get(&mut self, key: Bytes, _replica: bool) -> Result<GetResponse> {
-        let metadata = self.metadata_engine.get(&key).await.unwrap();
-        let data = self.storage_engine.get(&key).await.unwrap();
+        let storage_guard = self.storage.lock().await;
+        let metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
+        let data = storage_guard.storage_engine.get(&key).await.unwrap();
         match (metadata, data) {
             (None, None) => Err(Error::NotFound { key }),
             (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
@@ -105,27 +115,38 @@ impl Client for MockClient {
         key: Bytes,
         value: Bytes,
         metadata: Option<String>,
-        _replication: bool,
+        replication: bool,
     ) -> Result<PutResponse> {
-        if let Some(metadata) = metadata {
-            self.storage_engine.put(key.clone(), value).await.unwrap();
-            self.metadata_engine
-                .put(key, hex::decode(metadata).unwrap().into())
-                .await
-                .unwrap();
-        } else {
-            let mut m = Metadata {
-                versions: VersionVector::new(0),
-            };
-            m.versions.increment();
-            self.storage_engine.put(key.clone(), value).await.unwrap();
-            self.metadata_engine.put(key, m.serialize()).await.unwrap();
+        // only support replication for now
+        assert!(replication);
+        let metadata =
+            Metadata::deserialize(0, hex::decode(metadata.unwrap()).unwrap().into()).unwrap();
+        let storage_guard = self.storage.lock().await;
+
+        let existing_metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
+        if let Some(existing_metadata) = existing_metadata {
+            let deserialized_existing_metadata =
+                Metadata::deserialize(0, existing_metadata).unwrap();
+            if let MetadataEvaluation::Conflict =
+                metadata_evaluation(&metadata, &deserialized_existing_metadata)?
+            {
+                return Err(Error::Internal(crate::error::Internal::Unknown {
+                    reason: "Puts with conflicts are currently not implemented".to_string(),
+                }));
+            }
         }
 
+        storage_guard
+            .metadata_engine
+            .put(key.clone(), metadata.serialize())
+            .await
+            .unwrap();
+        storage_guard.storage_engine.put(key, value).await.unwrap();
         Ok(PutResponse {
             message: "Ok".to_string(),
         })
     }
+
     async fn heartbeat(&mut self, _: Vec<Node>) -> Result<HeartbeatResponse> {
         self.stats.heartbeat.n_calls += 1;
         let fault = &self.faults.heartbeat;
