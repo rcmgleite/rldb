@@ -142,7 +142,7 @@ impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredRep
 #[cfg(test)]
 mod tests {
     use crate::{
-        error::Error,
+        error::{Error, Internal},
         persistency::quorum::{Evaluation, OperationStatus, Quorum},
     };
 
@@ -162,9 +162,11 @@ mod tests {
 
         // even after the quorum is reached, there's nothing that prevents a client from calling update again.
         assert_eq!(
-            q.update(OperationStatus::Failure(Error::Generic {
-                reason: "fake".to_string(),
-            }))
+            q.update(OperationStatus::Failure(Error::Internal(
+                Internal::Unknown {
+                    reason: "fake".to_string()
+                }
+            )))
             .unwrap(),
             Evaluation::Reached(())
         );
@@ -178,25 +180,31 @@ mod tests {
     fn test_quorum_not_reached() {
         let mut q: MinRequiredReplicas<(), Error> = MinRequiredReplicas::new(3, 2).unwrap();
         assert_eq!(
-            q.update(OperationStatus::Failure(Error::Generic {
-                reason: "fake".to_string(),
-            }))
+            q.update(OperationStatus::Failure(Error::Internal(
+                Internal::Unknown {
+                    reason: "fake".to_string()
+                }
+            )))
             .unwrap(),
             Evaluation::NotReached
         );
 
         assert_eq!(
-            q.update(OperationStatus::Failure(Error::Generic {
-                reason: "fake".to_string(),
-            }))
+            q.update(OperationStatus::Failure(Error::Internal(
+                Internal::Unknown {
+                    reason: "fake".to_string()
+                }
+            )))
             .unwrap(),
             Evaluation::Unreachable
         );
 
         assert_eq!(
-            q.update(OperationStatus::Failure(Error::Generic {
-                reason: "fake".to_string(),
-            }))
+            q.update(OperationStatus::Failure(Error::Internal(
+                Internal::Unknown {
+                    reason: "fake".to_string()
+                }
+            )))
             .unwrap(),
             Evaluation::Unreachable
         );

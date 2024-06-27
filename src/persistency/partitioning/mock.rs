@@ -29,9 +29,9 @@ impl PartitioningScheme for MockPartitioningScheme {
         for key in self.nodes.iter() {
             return Ok(key.clone());
         }
-        Err(Error::Generic {
+        Err(Error::Internal(crate::error::Internal::Unknown {
             reason: "mock".to_string(),
-        })
+        }))
     }
 
     fn preference_list(&self, _key: &[u8], _list_size: usize) -> Result<Vec<Bytes>> {

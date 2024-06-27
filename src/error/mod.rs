@@ -12,37 +12,51 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Error enum with all possible variants
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Error {
+    /// Variant returned for GET requests when the key is not present
     NotFound {
         #[serde(with = "serde_utf8_bytes")]
         key: Bytes,
     },
+    /// returned by the server when the request is invalid for any reason -> this means the client has to fix something
     InvalidRequest(InvalidRequest),
-    InvalidServerConfig {
-        reason: String,
-    },
+    /// returned during server bootstrap if any configuration is invalid
+    InvalidServerConfig { reason: String },
+    /// Internal error that should be opaque to an external client.. Since today we use the same error type
+    /// for internal errors and client errors this is a bit moot
     Internal(Internal),
-    Io {
-        reason: String,
-    },
-    Generic {
-        reason: String,
-    },
+    /// Self explanatory
+    Io { reason: String },
+    /// Error returned either in PUT or GET when quorum is not met
     QuorumNotReached {
         operation: String,
         reason: String,
         errors: Vec<Error>,
     },
-    Logic {
-        reason: String,
-    },
-    Client(crate::client::error::Error),
+    /// Logic is a type of error that signifies a bug in the database.
+    Logic { reason: String },
+    /// Error returned when a cluster has a single node and tries to heartbeat to self
     SingleNodeCluster,
+    /// Returned when any invalid payload is returned/received by the server
+    InvalidJsonPayload { reason: String },
 }
 
 impl Error {
     /// Returns true if this is an instance of a [`Error::NotFound`] variant
     pub fn is_not_found(&self) -> bool {
         matches!(self, Error::NotFound { .. })
+    }
+
+    /// returnes true if this error is a variant of [`InvalidRequest::StaleContextProvided`]
+    pub fn is_stale_context_provided(&self) -> bool {
+        match self {
+            Error::InvalidRequest(e) => e.is_stale_context_provided(),
+            Error::QuorumNotReached {
+                operation: _,
+                reason: _,
+                errors,
+            } => errors.iter().all(|e| e.is_stale_context_provided()),
+            _ => false,
+        }
     }
 }
 
@@ -68,12 +82,10 @@ impl From<crate::storage_engine::Error> for Error {
     }
 }
 
-impl From<crate::client::error::Error> for Error {
-    fn from(err: crate::client::error::Error) -> Self {
-        match err {
-            crate::client::error::Error::NotFound { key } => Self::NotFound { key },
-            crate::client::error::Error::InvalidRequest(err) => Self::InvalidRequest(err),
-            _ => Self::Client(err),
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::InvalidJsonPayload {
+            reason: value.to_string(),
         }
     }
 }
@@ -97,4 +109,10 @@ pub enum InvalidRequest {
     InvalidJsonPayload(String),
     EmptyMessagePayload,
     UnrecognizedCommand { id: u32 },
+}
+
+impl InvalidRequest {
+    pub fn is_stale_context_provided(&self) -> bool {
+        matches!(self, InvalidRequest::StaleContextProvided)
+    }
 }

@@ -452,11 +452,7 @@ impl Db {
             while let Some(res) = futures.next().await {
                 match res {
                     Ok(res) => {
-                        if let Some((meta, _)) = &res {
-                            let m = Metadata::deserialize(0, meta.clone()).unwrap();
-                            println!("DEBUG: {:?}", m);
-                        }
-                        event!(Level::INFO, "GET Got result for quorum: {:?}", res);
+                        event!(Level::DEBUG, "GET Got result for quorum: {:?}", res);
 
                         let _ = quorum.update(OperationStatus::Success(res));
                     }
@@ -812,7 +808,7 @@ mod tests {
             .err()
             .unwrap();
 
-        assert!(err.to_string().contains("StaleContextProvided"));
+        assert!(err.is_stale_context_provided());
     }
 
     #[tokio::test]
@@ -858,7 +854,7 @@ mod tests {
             .err()
             .unwrap();
 
-        assert!(err.to_string().contains("StaleContextProvided"));
+        assert!(err.is_stale_context_provided());
     }
 
     // This is a very specific regression test. At commit https://github.com/rcmgleite/rldb/commit/8fd3edd4c5a8234a5994c352877a447c0c502bed

@@ -5,13 +5,12 @@ use std::{
 };
 
 use bytes::Bytes;
-use client::error::Error as ClientError;
-use error::Error as ServerError;
+use error::Error;
 use rand::{distributions::Alphanumeric, Rng};
 use rldb::{
-    client::{self, db_client::DbClient, Client},
+    client::{db_client::DbClient, Client},
     cluster::state::NodeStatus,
-    error::{self, InvalidRequest},
+    error::{self, Internal, InvalidRequest},
     persistency::Metadata,
     server::Server,
 };
@@ -279,7 +278,7 @@ async fn test_cluster_update_key_concurrently() {
                 .await
             {
                 Err(err) => match err {
-                    ClientError::QuorumNotReached {
+                    Error::QuorumNotReached {
                         operation,
                         reason: _,
                         errors,
@@ -287,9 +286,7 @@ async fn test_cluster_update_key_concurrently() {
                         assert_eq!(operation, *"Put");
                         for err in errors {
                             match err {
-                                ServerError::Client(ClientError::Internal(
-                                    error::Internal::Unknown { reason },
-                                )) => {
+                                Error::Internal(Internal::Unknown { reason }) => {
                                     assert!(
                                         reason.contains("conflicts are currently not implemented")
                                     );
@@ -301,7 +298,7 @@ async fn test_cluster_update_key_concurrently() {
                             }
                         }
                     }
-                    ClientError::InvalidRequest(InvalidRequest::StaleContextProvided) => {
+                    Error::InvalidRequest(InvalidRequest::StaleContextProvided) => {
                         saw_failure.lock().unwrap().stale_context += 1;
                     }
                     _ => {
@@ -412,7 +409,7 @@ async fn test_cluster_key_not_found() {
     let err = client.get(key, false).await.err().unwrap();
 
     match err {
-        client::error::Error::NotFound { key: _ } => {}
+        Error::NotFound { key: _ } => {}
         _ => {
             panic!("Unexpected error: {}", err);
         }
@@ -436,7 +433,7 @@ async fn test_cluster_put_no_quorum() {
         .unwrap();
 
     match err {
-        client::error::Error::QuorumNotReached {
+        Error::QuorumNotReached {
             operation,
             reason: _,
             errors: _,
@@ -485,7 +482,7 @@ async fn test_cluster_get_no_quorum() {
     let client = &mut clients[0];
     let err = client.get(key, false).await.err().unwrap();
     match err {
-        client::error::Error::QuorumNotReached {
+        Error::QuorumNotReached {
             operation,
             reason: _,
             errors: _,

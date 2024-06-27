@@ -197,11 +197,12 @@ mod tests {
     };
 
     use crate::{
-        client::{error::Error, mock::MockClientFactoryBuilder},
+        client::mock::MockClientFactoryBuilder,
         cluster::{
             heartbeat::{do_heartbeat, HeartbeatResult},
             state::{Node, NodeStatus, State},
         },
+        error::Error,
         persistency::partitioning::mock::MockPartitioningScheme,
         server::config::Quorum,
         test_utils::fault::When,
@@ -350,7 +351,7 @@ mod tests {
         let err = result.remove(0).err().unwrap();
 
         match err {
-            crate::error::Error::Client(Error::UnableToConnect { .. }) => {}
+            Error::Io { .. } => {}
             _ => {
                 panic!("Unexpected error: {}", err)
             }
@@ -416,7 +417,7 @@ mod tests {
         let err = result.remove(0).err().unwrap();
 
         match err {
-            crate::error::Error::Client(Error::Io { .. }) => {}
+            Error::Io { .. } => {}
             _ => {
                 panic!("Unexpected error: {}", err)
             }

@@ -15,8 +15,8 @@ use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
 use crate::server::message::Message;
 
-use super::error::{Error, Result};
 use super::{Client, Factory};
+use crate::error::{Error, Result};
 
 /// DbClient handle
 pub struct DbClient {
@@ -112,11 +112,6 @@ impl Client for DbClient {
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        if response.id != cmd::put::Put::cmd_id() {
-            return Err(Error::InvalidServerResponse {
-                reason: "response id does not match request".to_string(),
-            });
-        }
 
         event!(
             Level::DEBUG,
@@ -170,9 +165,7 @@ pub struct DbClientFactory;
 impl Factory for DbClientFactory {
     async fn get(&self, addr: String) -> Result<Box<dyn Client + Send>> {
         let mut client = DbClient::new(addr);
-        client.connect().await.map_err(|e| Error::UnableToConnect {
-            reason: e.to_string(),
-        })?;
+        client.connect().await?;
 
         Ok(Box::new(client))
     }

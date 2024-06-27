@@ -12,6 +12,7 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
     },
+    error::{Error, Result},
     persistency::{metadata_evaluation, Metadata, MetadataEvaluation},
     storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
@@ -25,7 +26,7 @@ use std::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::{error::Error, error::Result, Client, Factory as ClientFactory};
+use super::{Client, Factory as ClientFactory};
 
 type StorageEngineType = Arc<dyn StorageEngine + Send + Sync>;
 
@@ -85,7 +86,7 @@ impl Client for MockClient {
         let fault = &self.faults.connect;
         match fault.when {
             When::Always => {
-                return Err(Error::UnableToConnect {
+                return Err(Error::Io {
                     reason: "Mocked error on connect".to_string(),
                 });
             }
