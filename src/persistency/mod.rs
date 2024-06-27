@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
-use std::sync::Arc;
+use std::{mem::size_of, sync::Arc};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{event, Level};
 use versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
@@ -55,6 +55,102 @@ struct Storage {
     /// and without a separate storage engine for metadata, we would always require a GET before a PUT,
     /// which introduces more overhead than needed.
     metadata_engine: InMemory,
+}
+
+struct StorageItem {
+    value: Bytes,
+    metadata: Bytes,
+}
+
+struct StorageGetResponse {
+    items: Vec<StorageItem>,
+}
+
+impl Storage {
+    async fn put(
+        &self,
+        key: Bytes,
+        n_items: usize,
+        items: Vec<Bytes>,
+        is_metadata: bool,
+    ) -> Result<()> {
+        let mut buf = BytesMut::new();
+        buf.put_u32(n_items as u32);
+
+        for item in items {
+            buf.put_u32(item.len() as u32);
+            buf.put_slice(&item[..]);
+        }
+
+        if is_metadata {
+            self.metadata_engine.put(key, buf.freeze()).await?;
+        } else {
+            self.data_engine.put(key, buf.freeze()).await?;
+        }
+        Ok(())
+    }
+
+    fn unmarshall_item(item: &mut Bytes) -> Result<Bytes> {
+        if item.remaining() < size_of::<u32>() {
+            return Err(Error::Logic {
+                reason: "Buffer too small".to_string(),
+            });
+        }
+
+        let item_length = item.get_u32() as usize;
+        if item.remaining() < item_length {
+            return Err(Error::Logic {
+                reason: "Buffer too small".to_string(),
+            });
+        }
+
+        let mut ret = item.clone();
+        ret.truncate(item_length);
+        item.advance(item_length);
+        Ok(ret)
+    }
+
+    fn unmarshall_items(mut items: Bytes) -> Result<Vec<Bytes>> {
+        let n_items = items.get_u32() as usize;
+        let mut res = Vec::with_capacity(n_items);
+        for _ in 0..n_items {
+            res.push(Self::unmarshall_item(&mut items)?);
+        }
+
+        Ok(res)
+    }
+
+    async fn get(&self, key: Bytes) -> Result<StorageGetResponse> {
+        let metadata = self
+            .metadata_engine
+            .get(&key)
+            .await?
+            .ok_or(Error::NotFound { key: key.clone() })?;
+
+        let data = self.data_engine.get(&key).await?.ok_or(Error::Logic {
+            reason: "Metadata entry found but no data entry found".to_string(),
+        })?;
+
+        let metadata_items = Self::unmarshall_items(metadata)?;
+        let data_items = Self::unmarshall_items(data)?;
+
+        if metadata_items.len() != data_items.len() {
+            return Err(Error::Logic {
+                reason: "Data and Metadata items must have the same length".to_string(),
+            });
+        }
+
+        let data_and_metadata_items: Vec<StorageItem> = std::iter::zip(metadata_items, data_items)
+            .map(|(m, d)| StorageItem {
+                value: d,
+                metadata: m,
+            })
+            .collect();
+
+        Ok(StorageGetResponse {
+            items: data_and_metadata_items,
+        })
+    }
 }
 
 impl std::fmt::Debug for Db {
