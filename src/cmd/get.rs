@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::persistency::{Db, Metadata};
 use crate::server::message::IntoMessage;
-use crate::utils::serde_utf8_bytes;
+use crate::utils::{serde_utf8_bytes, serde_vec_utf8_bytes};
 
 pub const GET_CMD: u32 = 2;
 
@@ -39,16 +39,15 @@ impl Get {
     }
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
-    pub async fn execute(self, db: Arc<Db>) -> Result<Vec<GetResponse>> {
-        Ok(db
-            .get(self.key.clone(), self.replica)
-            .await?
-            .into_iter()
-            .map(|entry| GetResponse {
-                value: entry.value,
-                metadata: hex::encode(entry.metadata.serialize()),
-            })
-            .collect())
+    pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
+        let res = db.get(self.key.clone(), self.replica).await?;
+
+        // TODOs:
+        // 1. Metadata merge - remember that now we need to properly think about the Context abstraction as opposed to
+        //  using Metadata directly
+        // 2. generate the proper GetResponse
+        // 3. likely create another GET API used internally?
+        todo!()
     }
 
     /// returns the cmd id for [`Get`]
@@ -74,8 +73,8 @@ impl IntoMessage for Get {
 /// The struct that represents a [`Get`] response payload
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GetResponse {
-    #[serde(with = "serde_utf8_bytes")]
-    pub value: Bytes,
+    #[serde(with = "serde_vec_utf8_bytes")]
+    pub value: Vec<Bytes>,
     /// A hex encoded representation of the object metadata
     pub metadata: String,
 }
