@@ -3,7 +3,7 @@ use crate::{
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::{mem::size_of, sync::Arc};
+use std::{collections::HashMap, mem::size_of, sync::Arc};
 use tracing::{event, Level};
 
 use super::{
@@ -75,41 +75,46 @@ impl Storage {
     }
 
     pub async fn put(&self, key: Bytes, entry: StorageEntry) -> Result<Vec<StorageEntry>> {
-        let current_versions = self.get(key.clone()).await?;
+        let current_versions = match self.get(key.clone()).await {
+            Ok(current_versions) => current_versions,
+            Err(Error::NotFound { .. }) => Vec::new(),
+            Err(err) => {
+                return Err(err);
+            }
+        };
         event!(
             Level::INFO,
             "current versions - key: {:?} - {:?}",
             key,
             current_versions
         );
-        let versions_to_store = if let Some(current_versions) = current_versions {
-            let mut entries_to_store = Vec::new();
-            for existing_entry in current_versions {
-                if let super::MetadataEvaluation::Override =
-                    metadata_evaluation(&entry.metadata, &existing_entry.metadata)?
-                {
-                    entries_to_store.push(entry.clone());
-                } else {
-                    entries_to_store.push(existing_entry);
-                    entries_to_store.push(entry.clone());
-                }
+
+        let mut version_map = HashMap::<Metadata, StorageEntry>::new();
+        version_map.insert(
+            entry.metadata.clone(),
+            StorageEntry {
+                metadata: entry.metadata.clone(),
+                value: entry.value,
+            },
+        );
+
+        for existing_entry in current_versions {
+            if let super::MetadataEvaluation::Conflict =
+                metadata_evaluation(&entry.metadata, &existing_entry.metadata)?
+            {
+                version_map.insert(existing_entry.metadata.clone(), existing_entry);
             }
+        }
 
-            entries_to_store.sort();
-            entries_to_store.dedup();
-
-            entries_to_store
-        } else {
-            vec![entry]
-        };
+        let entries_to_store = version_map.into_iter().map(|e| e.1).collect();
 
         event!(
             Level::INFO,
             "versions that will be stored - key: {:?} - {:?}",
             key,
-            versions_to_store
+            entries_to_store
         );
-        self.do_put(key, versions_to_store).await
+        self.do_put(key, entries_to_store).await
     }
 
     async fn do_put(&self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
@@ -165,34 +170,33 @@ impl Storage {
         Ok(res)
     }
 
-    pub async fn get(&self, key: Bytes) -> Result<Option<Vec<StorageEntry>>> {
-        let metadata = self.metadata_engine.get(&key).await?;
-        if let Some(metadata) = metadata {
-            let data = self.data_engine.get(&key).await?.ok_or(Error::Logic {
-                reason: "Metadata entry found but no data entry found".to_string(),
-            })?;
+    pub async fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
+        let metadata = self
+            .metadata_engine
+            .get(&key)
+            .await?
+            .ok_or(Error::NotFound { key: key.clone() })?;
+        let data = self.data_engine.get(&key).await?.ok_or(Error::Logic {
+            reason: "Metadata entry found but no data entry found".to_string(),
+        })?;
 
-            let metadata_items = Self::unmarshall_entries(metadata)?;
-            let data_items = Self::unmarshall_entries(data)?;
+        let metadata_items = Self::unmarshall_entries(metadata)?;
+        let data_items = Self::unmarshall_entries(data)?;
 
-            if metadata_items.len() != data_items.len() {
-                return Err(Error::Logic {
-                    reason: "Data and Metadata items must have the same length".to_string(),
-                });
-            }
-
-            let data_and_metadata_items: Vec<StorageEntry> =
-                std::iter::zip(metadata_items, data_items)
-                    .map(|(m, d)| StorageEntry {
-                        value: d,
-                        metadata: Metadata::deserialize(self.pid, m).unwrap(), // TODO: unwrap()
-                    })
-                    .collect();
-
-            Ok(Some(data_and_metadata_items))
-        } else {
-            Ok(None)
+        if metadata_items.len() != data_items.len() {
+            return Err(Error::Logic {
+                reason: "Data and Metadata items must have the same length".to_string(),
+            });
         }
+
+        let data_and_metadata_items: Vec<StorageEntry> = std::iter::zip(metadata_items, data_items)
+            .map(|(m, d)| StorageEntry {
+                value: d,
+                metadata: Metadata::deserialize(self.pid, m).unwrap(), // TODO: unwrap()
+            })
+            .collect();
+
+        Ok(data_and_metadata_items)
     }
 }
 
@@ -241,7 +245,7 @@ mod tests {
 
         store.put(key.clone(), entry_pid_1).await.unwrap();
 
-        let mut get_entries = store.get(key).await.unwrap().unwrap();
+        let mut get_entries = store.get(key).await.unwrap();
 
         assert_eq!(get_entries.len(), 2);
         let entry_0 = get_entries.remove(0);

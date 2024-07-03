@@ -5,7 +5,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::persistency::{Db, Metadata};
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
@@ -40,17 +40,15 @@ impl Get {
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
     pub async fn execute(self, db: Arc<Db>) -> Result<Vec<GetResponse>> {
-        if let Some(resp) = db.get(self.key.clone(), self.replica).await? {
-            Ok(resp
-                .into_iter()
-                .map(|entry| GetResponse {
-                    value: entry.value,
-                    metadata: hex::encode(entry.metadata.serialize()),
-                })
-                .collect())
-        } else {
-            Err(Error::NotFound { key: self.key })
-        }
+        Ok(db
+            .get(self.key.clone(), self.replica)
+            .await?
+            .into_iter()
+            .map(|entry| GetResponse {
+                value: entry.value,
+                metadata: hex::encode(entry.metadata.serialize()),
+            })
+            .collect())
     }
 
     /// returns the cmd id for [`Get`]

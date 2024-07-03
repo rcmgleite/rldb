@@ -355,7 +355,7 @@ impl Db {
     ///    - this will mean merging [`VersionVector`]s so that the client receives the merged version alongside an array of objects
     ///  2. Handle integrity checks properly
     ///  3. Implement Read Repair
-    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<Vec<StorageEntry>>> {
+    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Vec<StorageEntry>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");
             let storage_guard = self.storage.lock().await;
@@ -420,7 +420,7 @@ impl Db {
         }
     }
 
-    async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<Vec<StorageEntry>>> {
+    async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Vec<StorageEntry>> {
         if self.owns_key(&src_addr)? {
             event!(Level::DEBUG, "Getting data from local storage");
             let storage_guard = self.storage.lock().await;
@@ -448,18 +448,17 @@ impl Db {
 
             let resp = client.get(key.clone(), true).await?;
             // FIXME: remove unwrap()
-            Ok(Some(
-                resp.into_iter()
-                    .map(|entry| StorageEntry {
-                        value: entry.value,
-                        metadata: Metadata::deserialize(
-                            self.own_state.pid(),
-                            hex::decode(entry.metadata).unwrap().into(),
-                        )
-                        .unwrap(),
-                    })
-                    .collect(),
-            ))
+            Ok(resp
+                .into_iter()
+                .map(|entry| StorageEntry {
+                    value: entry.value,
+                    metadata: Metadata::deserialize(
+                        self.own_state.pid(),
+                        hex::decode(entry.metadata).unwrap().into(),
+                    )
+                    .unwrap(),
+                })
+                .collect())
         }
     }
 
@@ -551,7 +550,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut get_result = db.get(key, replication).await.unwrap().unwrap();
+        let mut get_result = db.get(key, replication).await.unwrap();
         assert_eq!(get_result.len(), 1);
 
         let entry = get_result.remove(0);
@@ -608,7 +607,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut get_result = db.get(key, replication).await.unwrap().unwrap();
+        let mut get_result = db.get(key, replication).await.unwrap();
 
         let entry = get_result.remove(0);
         assert_eq!(entry.value, value);
@@ -678,8 +677,7 @@ mod tests {
             .await
             .unwrap();
 
-        // let (first_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
-        let mut entries = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut entries = db.get(key.clone(), replication).await.unwrap();
 
         assert_eq!(entries.len(), 1);
 
@@ -698,7 +696,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut second_read_entries = db.get(key, replication).await.unwrap().unwrap();
+        let mut second_read_entries = db.get(key, replication).await.unwrap();
         assert_eq!(second_read_entries.len(), 1);
         let deserialized_first_metadata = first_entry.metadata;
         let second_entry = second_read_entries.remove(0);
@@ -724,7 +722,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut first_entries = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut first_entries = db.get(key.clone(), replication).await.unwrap();
 
         assert_eq!(first_entries.len(), 1);
         let first_entry = first_entries.remove(0);
@@ -767,7 +765,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut first_entries = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut first_entries = db.get(key.clone(), replication).await.unwrap();
 
         assert_eq!(first_entries.len(), 1);
         let first_entry = first_entries.remove(0);
