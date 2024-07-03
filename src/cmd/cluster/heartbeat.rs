@@ -18,12 +18,13 @@ pub const CMD_CLUSTER_HEARTBEAT: u32 = 100;
 #[derive(Serialize, Deserialize)]
 pub struct Heartbeat {
     nodes: Vec<Node>,
+    request_id: String,
 }
 
 impl Heartbeat {
     /// Constructs a new heartbeat [`crate::cmd::Command`]
-    pub fn new(nodes: Vec<Node>) -> Self {
-        Self { nodes }
+    pub fn new(nodes: Vec<Node>, request_id: String) -> Self {
+        Self { nodes, request_id }
     }
 
     /// Executes a [`Heartbeat`] command
@@ -48,6 +49,10 @@ impl Heartbeat {
 impl IntoMessage for Heartbeat {
     fn id(&self) -> u32 {
         Self::cmd_id()
+    }
+
+    fn request_id(&self) -> String {
+        self.request_id.clone()
     }
 
     fn payload(&self) -> Option<Bytes> {

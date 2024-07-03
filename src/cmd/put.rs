@@ -22,20 +22,32 @@ pub struct Put {
     replication: bool,
     #[serde(with = "serde_hex_bytes")]
     metadata: Option<Bytes>,
+    request_id: String,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
-    pub fn new(key: Bytes, value: Bytes, metadata: Option<String>) -> Self {
-        Self::new_private(key, value, metadata, false)
+    pub fn new(key: Bytes, value: Bytes, metadata: Option<String>, request_id: String) -> Self {
+        Self::new_private(key, value, metadata, false, request_id)
     }
 
     /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
-    pub fn new_replication(key: Bytes, value: Bytes, metadata: Option<String>) -> Self {
-        Self::new_private(key, value, metadata, true)
+    pub fn new_replication(
+        key: Bytes,
+        value: Bytes,
+        metadata: Option<String>,
+        request_id: String,
+    ) -> Self {
+        Self::new_private(key, value, metadata, true, request_id)
     }
 
-    fn new_private(key: Bytes, value: Bytes, metadata: Option<String>, replication: bool) -> Self {
+    fn new_private(
+        key: Bytes,
+        value: Bytes,
+        metadata: Option<String>,
+        replication: bool,
+        request_id: String,
+    ) -> Self {
         let metadata: Option<Bytes> = metadata.map(|m| hex::decode(m).unwrap().into());
 
         Self {
@@ -43,12 +55,13 @@ impl Put {
             value,
             replication,
             metadata,
+            request_id,
         }
     }
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
-        let span = span!(Level::INFO, "persistency::put", key=?self.key);
+        let span = span!(Level::INFO, "persistency::put", key=?self.key, value=?self.value);
         db.put(self.key, self.value, self.replication, self.metadata)
             .instrument(span)
             .await?;
@@ -69,6 +82,10 @@ impl IntoMessage for Put {
 
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
+
+    fn request_id(&self) -> String {
+        self.request_id.clone()
     }
 }
 

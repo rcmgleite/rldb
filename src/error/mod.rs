@@ -100,7 +100,9 @@ pub enum Internal {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum InvalidRequest {
     Generic { reason: String },
-    MaxMessageSizeExceeded { max: usize, got: usize },
+    MessageReceivedWithoutRequestId,
+    MessageRequestIdMustBeUtf8Encoded,
+    MaxMessageSizeExceeded { max: u32, got: u32 },
     StaleContextProvided,
     EmptyContextWhenOverridingKey,
     ReplicationPutMustIncludeContext,

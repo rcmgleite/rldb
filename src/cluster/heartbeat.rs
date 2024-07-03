@@ -52,7 +52,7 @@ pub async fn start_heartbeat(cluster_state: Arc<State>, config: HeartbeatConfig)
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(config.interval as u64)).await;
 
-        let span = span!(Level::DEBUG, "heartbeat_loop", addr=?cluster_state.own_addr());
+        let span = span!(Level::TRACE, "heartbeat_loop", addr=?cluster_state.own_addr());
         do_heartbeat(
             config.fanout,
             cluster_state.clone(),
@@ -62,7 +62,7 @@ pub async fn start_heartbeat(cluster_state: Arc<State>, config: HeartbeatConfig)
         .instrument(span)
         .await;
 
-        event!(Level::DEBUG, "heartbeat cycle finished {:?}", cluster_state);
+        event!(Level::TRACE, "heartbeat cycle finished {:?}", cluster_state);
     }
 }
 
@@ -79,7 +79,7 @@ async fn do_heartbeat_to_node(
     client_factory: Arc<dyn ClientFactory + Send + Sync + 'static>,
     cluster_connections: ClusterConnectionsMap,
 ) -> Result<HeartbeatResult> {
-    event!(Level::DEBUG, "heartbeating to node: {:?}", target_node);
+    event!(Level::TRACE, "heartbeating to node: {:?}", target_node);
 
     let client = cluster_connections
         .lock()
@@ -112,7 +112,7 @@ async fn do_heartbeat_to_node(
 
     if let Err(err) = client.heartbeat(known_nodes).await {
         event!(
-            Level::WARN,
+            Level::DEBUG,
             "Unable to heartbeat to node {:?} - err {:?}",
             target_node,
             err
@@ -128,7 +128,7 @@ async fn do_heartbeat_to_node(
         Err(err.into())
     } else {
         event!(
-            Level::DEBUG,
+            Level::TRACE,
             "Successfully heartbeated to node {:?}",
             target_node,
         );

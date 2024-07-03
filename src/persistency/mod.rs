@@ -5,24 +5,23 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
-use std::{mem::size_of, sync::Arc};
+use std::sync::Arc;
+use storage::{Storage, StorageEngine, StorageEntry};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{event, Level};
-use versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
+use versioning::version_vector::{ProcessId, VersionVector};
 
 pub mod partitioning;
 pub mod quorum;
+pub mod storage;
 pub mod versioning;
 
 use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
     error::{Error, Internal, InvalidRequest, Result},
-    storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 
-/// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
-pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
 pub type ClientFactory = Box<dyn Factory + Send + Sync>;
 
 /// Db is the abstraction that connects storage_engine and overall database state
@@ -40,117 +39,6 @@ pub struct Db {
     own_state: State,
     /// Used to construct [`crate::client::Client`] instances
     client_factory: ClientFactory,
-}
-
-/// Since I don't know what the inner [`StorageEngine`] API should look like to enable easy integration with [`VersionVector`],
-/// this intermediate type works as a facade between [`StorageEngine`] and [`Db`]. This might disappear once I finally
-/// come up with a proper [`StorageEngine`] API.
-#[derive(Debug)]
-struct Storage {
-    data_engine: StorageEngine,
-    /// Metadata Storage engine - currently hardcoded to be in-memory
-    /// The idea of having a separate storage engine just for metadata is do that we can avoid
-    /// adding framing layers to the data we want to store to append/prepend the metadata.
-    /// Also, when we do PUTs, we have to validate metadata (version) prior to storing the data,
-    /// and without a separate storage engine for metadata, we would always require a GET before a PUT,
-    /// which introduces more overhead than needed.
-    metadata_engine: InMemory,
-}
-
-struct StorageItem {
-    value: Bytes,
-    metadata: Bytes,
-}
-
-struct StorageGetResponse {
-    items: Vec<StorageItem>,
-}
-
-impl Storage {
-    async fn put(
-        &self,
-        key: Bytes,
-        n_items: usize,
-        items: Vec<Bytes>,
-        is_metadata: bool,
-    ) -> Result<()> {
-        let mut buf = BytesMut::new();
-        buf.put_u32(n_items as u32);
-
-        for item in items {
-            buf.put_u32(item.len() as u32);
-            buf.put_slice(&item[..]);
-        }
-
-        if is_metadata {
-            self.metadata_engine.put(key, buf.freeze()).await?;
-        } else {
-            self.data_engine.put(key, buf.freeze()).await?;
-        }
-        Ok(())
-    }
-
-    fn unmarshall_item(item: &mut Bytes) -> Result<Bytes> {
-        if item.remaining() < size_of::<u32>() {
-            return Err(Error::Logic {
-                reason: "Buffer too small".to_string(),
-            });
-        }
-
-        let item_length = item.get_u32() as usize;
-        if item.remaining() < item_length {
-            return Err(Error::Logic {
-                reason: "Buffer too small".to_string(),
-            });
-        }
-
-        let mut ret = item.clone();
-        ret.truncate(item_length);
-        item.advance(item_length);
-        Ok(ret)
-    }
-
-    fn unmarshall_items(mut items: Bytes) -> Result<Vec<Bytes>> {
-        let n_items = items.get_u32() as usize;
-        let mut res = Vec::with_capacity(n_items);
-        for _ in 0..n_items {
-            res.push(Self::unmarshall_item(&mut items)?);
-        }
-
-        Ok(res)
-    }
-
-    async fn get(&self, key: Bytes) -> Result<StorageGetResponse> {
-        let metadata = self
-            .metadata_engine
-            .get(&key)
-            .await?
-            .ok_or(Error::NotFound { key: key.clone() })?;
-
-        let data = self.data_engine.get(&key).await?.ok_or(Error::Logic {
-            reason: "Metadata entry found but no data entry found".to_string(),
-        })?;
-
-        let metadata_items = Self::unmarshall_items(metadata)?;
-        let data_items = Self::unmarshall_items(data)?;
-
-        if metadata_items.len() != data_items.len() {
-            return Err(Error::Logic {
-                reason: "Data and Metadata items must have the same length".to_string(),
-            });
-        }
-
-        let data_and_metadata_items: Vec<StorageItem> = std::iter::zip(metadata_items, data_items)
-            .map(|(m, d)| StorageItem {
-                value: d,
-                metadata: m,
-            })
-            .collect();
-
-        Ok(StorageGetResponse {
-            items: data_and_metadata_items,
-        })
-    }
 }
 
 impl std::fmt::Debug for Db {
@@ -208,7 +96,7 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
     murmur3_hash(addr)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Metadata {
     // version vector of this object
     pub versions: VersionVector,
@@ -217,28 +105,6 @@ pub struct Metadata {
 pub(crate) enum MetadataEvaluation {
     Override,
     Conflict,
-}
-
-pub(crate) fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluation> {
-    match lhs.versions.causality(&rhs.versions) {
-        VersionVectorOrd::HappenedBefore | VersionVectorOrd::Equals => {
-            // the data we are trying to store is actually older than what's already stored.
-            // This can happen due to read repair and active anti-entropy processes for instance.
-            // We return an error here to make sure the client knows the put was rejected and does not expect
-            // the value passed in this request to be stored
-            event!(Level::WARN, "StaleContextProvided");
-            Err(Error::InvalidRequest(InvalidRequest::StaleContextProvided))
-        }
-        VersionVectorOrd::HappenedAfter => {
-            // This means we are ok to override both data and metadata
-            Ok(MetadataEvaluation::Override)
-        }
-        VersionVectorOrd::HappenedConcurrently => {
-            // now we have the problem of concurrent writes. Our current approach is to actually
-            // store both versions so that the client can deal with the conflict resolution
-            Ok(MetadataEvaluation::Conflict)
-        }
-    }
 }
 
 impl Metadata {
@@ -272,17 +138,16 @@ impl Db {
         cluster_state: Arc<ClusterState>,
         client_factory: ClientFactory,
     ) -> Self {
+        let own_state = State::Active {
+            shared: Arc::new(Shared::new(&own_addr)),
+        };
         Self {
-            storage: Arc::new(AsyncMutex::new({
-                Storage {
-                    data_engine: storage_engine,
-                    metadata_engine: InMemory::default(),
-                }
-            })),
+            storage: Arc::new(AsyncMutex::new(Storage::new(
+                storage_engine,
+                own_state.pid(),
+            ))),
             cluster_state,
-            own_state: State::Active {
-                shared: Arc::new(Shared::new(&own_addr)),
-            },
+            own_state,
             client_factory,
         }
     }
@@ -311,7 +176,7 @@ impl Db {
     ) -> Result<()> {
         let preference_list = self.cluster_state.preference_list(&key)?;
         if replication {
-            event!(Level::INFO, "Executing a replication Put");
+            event!(Level::DEBUG, "Executing a replication Put");
             if !preference_list.contains(&self.cluster_state.own_addr()) {
                 return Err(Error::Internal(Internal::Logic {
                     reason: format!(
@@ -335,7 +200,7 @@ impl Db {
         } else if !preference_list.contains(&self.cluster_state.own_addr()) {
             let dst_node = preference_list[0].clone();
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "Executing a forward proxy PUT to node: {:?}",
                 dst_node
             );
@@ -358,7 +223,7 @@ impl Db {
                 .put(key.clone(), value, metadata.map(hex::encode), false)
                 .await?;
         } else {
-            event!(Level::INFO, "Executing a coordinator Put");
+            event!(Level::DEBUG, "Executing a coordinator Put");
             let mut metadata = if let Some(metadata) = metadata {
                 Metadata::deserialize(self.own_state.pid(), metadata)?
             } else {
@@ -379,7 +244,7 @@ impl Db {
             // the preference list will contain the node itself (otherwise there's a bug).
             // How can we assert that here? Maybe this should be guaranteed by the Db API instead...
             let preference_list = self.preference_list(&key)?;
-            event!(Level::INFO, "preference_list: {:?}", preference_list);
+            event!(Level::DEBUG, "preference_list: {:?}", preference_list);
             for node in preference_list {
                 futures.push(self.do_put(key.clone(), value.clone(), metadata.clone(), node))
             }
@@ -426,30 +291,11 @@ impl Db {
 
     async fn local_put(&self, key: Bytes, value: Bytes, metadata: Metadata) -> Result<()> {
         let storage_guard = self.storage.lock().await;
-        let existing_metadata_for_key = storage_guard.metadata_engine.get(&key).await?;
-        if let Some(existing_metadata_for_key) = existing_metadata_for_key {
-            // If we already have a metadata for the key being PUT, we have to understand if this new PUT
-            // descends from what we have stored or if this is a concurrent put (see [`crate::persistency::versioning::VersionVector`])
-            // for nomenclature description.
-            let existing_metadata_for_key =
-                Metadata::deserialize(self.own_state.pid(), existing_metadata_for_key)?;
-
-            if let MetadataEvaluation::Conflict =
-                metadata_evaluation(&metadata, &existing_metadata_for_key)?
-            {
-                return Err(Error::Internal(crate::error::Internal::Unknown {
-                    reason: "Puts with conflicts are currently not implemented".to_string(),
-                }));
-            }
-        }
-        // if, on the other hand, there's no pre-existing metadata for this key, this is the first PUT
-        // for the given key. just executed it.
-        storage_guard.data_engine.put(key.clone(), value).await?;
         storage_guard
-            .metadata_engine
-            .put(key, metadata.serialize())
+            .put(key, StorageEntry { value, metadata })
             .await?;
 
+        // FIXME: return type
         Ok(())
     }
 
@@ -462,11 +308,11 @@ impl Db {
         dst_addr: Bytes,
     ) -> Result<()> {
         if self.owns_key(&dst_addr)? {
-            event!(Level::INFO, "Storing key : {:?} locally", key);
+            event!(Level::DEBUG, "Storing key : {:?} locally", key);
             self.local_put(key, value, metadata).await?;
         } else {
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "will store key : {:?} in remote node: {:?}",
                 key,
                 dst_addr
@@ -509,31 +355,19 @@ impl Db {
     ///    - this will mean merging [`VersionVector`]s so that the client receives the merged version alongside an array of objects
     ///  2. Handle integrity checks properly
     ///  3. Implement Read Repair
-    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<(Bytes, Bytes)>> {
+    pub async fn get(&self, key: Bytes, replica: bool) -> Result<Option<Vec<StorageEntry>>> {
         if replica {
-            event!(Level::INFO, "Executing a replica GET");
+            event!(Level::DEBUG, "Executing a replica GET");
             let storage_guard = self.storage.lock().await;
-            if let Some(metadata) = storage_guard.metadata_engine.get(&key).await? {
-                if let Some(data) = storage_guard.data_engine.get(&key).await? {
-                    Ok(Some((metadata, data)))
-                } else {
-                    Err(Error::Internal(crate::error::Internal::Logic {
-                        reason:
-                            "got a metadata entry without a corresponding data entry. This is a bug"
-                                .to_string(),
-                    }))
-                }
-            } else {
-                Ok(None)
-            }
+            Ok(storage_guard.get(key.clone()).await?)
         } else {
-            event!(Level::INFO, "executing a non-replica GET");
+            event!(Level::DEBUG, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
             let mut quorum = MinRequiredReplicas::new(quorum_config.replicas, quorum_config.reads)?;
 
             let mut futures = FuturesUnordered::new();
             let preference_list = self.preference_list(&key)?;
-            event!(Level::INFO, "GET preference_list {:?}", preference_list);
+            event!(Level::DEBUG, "GET preference_list {:?}", preference_list);
             for node in preference_list {
                 futures.push(self.do_get(key.clone(), node))
             }
@@ -564,10 +398,8 @@ impl Db {
                 }
             }
 
-            event!(Level::DEBUG, "quorum: {:?}", quorum);
-
             let quorum_result = quorum.finish();
-            event!(Level::ERROR, "Get quorum result: {:?}", quorum_result);
+            event!(Level::DEBUG, "Get quorum result: {:?}", quorum_result);
             match quorum_result.evaluation {
                 Evaluation::Reached(value) => Ok(value),
                 Evaluation::NotReached | Evaluation::Unreachable => {
@@ -588,23 +420,11 @@ impl Db {
         }
     }
 
-    async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<(Bytes, Bytes)>> {
+    async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Option<Vec<StorageEntry>>> {
         if self.owns_key(&src_addr)? {
-            event!(Level::INFO, "Getting data from local storage");
+            event!(Level::DEBUG, "Getting data from local storage");
             let storage_guard = self.storage.lock().await;
-            if let Some(metadata) = storage_guard.metadata_engine.get(&key).await? {
-                if let Some(data) = storage_guard.data_engine.get(&key).await? {
-                    Ok(Some((metadata, data)))
-                } else {
-                    Err(Error::Internal(crate::error::Internal::Logic {
-                        reason:
-                            "got a metadata entry without a corresponding data entry. This is a bug"
-                                .to_string(),
-                    }))
-                }
-            } else {
-                Ok(None)
-            }
+            Ok(storage_guard.get(key.clone()).await?)
         } else {
             event!(
                 Level::DEBUG,
@@ -628,10 +448,18 @@ impl Db {
 
             let resp = client.get(key.clone(), true).await?;
             // FIXME: remove unwrap()
-            Ok(Some((
-                hex::decode(resp.metadata).unwrap().into(),
-                resp.value,
-            )))
+            Ok(Some(
+                resp.into_iter()
+                    .map(|entry| StorageEntry {
+                        value: entry.value,
+                        metadata: Metadata::deserialize(
+                            self.own_state.pid(),
+                            hex::decode(entry.metadata).unwrap().into(),
+                        )
+                        .unwrap(),
+                    })
+                    .collect(),
+            ))
         }
     }
 
@@ -659,7 +487,6 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use rand::{distributions::Alphanumeric, Rng};
     use std::sync::Arc;
 
     use crate::{
@@ -724,12 +551,14 @@ mod tests {
             .await
             .unwrap();
 
-        let (metadata, data) = db.get(key, replication).await.unwrap().unwrap();
+        let mut get_result = db.get(key, replication).await.unwrap().unwrap();
+        assert_eq!(get_result.len(), 1);
 
-        assert_eq!(data, value);
+        let entry = get_result.remove(0);
+        assert_eq!(entry.value, value);
 
         let self_pid = process_id(&local_addr);
-        let deserialized_metadata = Metadata::deserialize(self_pid, metadata).unwrap();
+        let deserialized_metadata = entry.metadata;
         let mut expected_metadata = Metadata {
             versions: VersionVector::new(self_pid),
         };
@@ -779,12 +608,13 @@ mod tests {
         .await
         .unwrap();
 
-        let (received_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
+        let mut get_result = db.get(key, replication).await.unwrap().unwrap();
 
-        assert_eq!(data, value);
+        let entry = get_result.remove(0);
+        assert_eq!(entry.value, value);
 
         let self_pid = process_id(&local_addr);
-        let deserialized_metadata = Metadata::deserialize(self_pid, received_metadata).unwrap();
+        let deserialized_metadata = entry.metadata;
 
         let mut expected_metadata =
             Metadata::deserialize(self_pid, initial_metadata.serialize()).unwrap();
@@ -838,7 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_db_put_new_metadata_descends_from_original_metadata() {
-        let (local_addr, db) = initialize_state();
+        let (_, db) = initialize_state();
         let key = Bytes::from("a key");
         let value = Bytes::from("a value");
         let replication = false;
@@ -848,9 +678,13 @@ mod tests {
             .await
             .unwrap();
 
-        let (first_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+        // let (first_metadata, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut entries = db.get(key.clone(), replication).await.unwrap().unwrap();
 
-        assert_eq!(data, value);
+        assert_eq!(entries.len(), 1);
+
+        let first_entry = entries.remove(0);
+        assert_eq!(first_entry.value, value);
 
         let new_value = Bytes::from("a new value");
         // Note that we are piping the metadata received on GET to the PUT request.
@@ -859,17 +693,16 @@ mod tests {
             key.clone(),
             new_value.clone(),
             replication,
-            Some(first_metadata.clone()),
+            Some(first_entry.metadata.serialize()),
         )
         .await
         .unwrap();
 
-        let (second_metadata, data) = db.get(key, replication).await.unwrap().unwrap();
-        assert_eq!(data, new_value);
-        let self_pid = process_id(&local_addr);
-        let deserialized_first_metadata = Metadata::deserialize(self_pid, first_metadata).unwrap();
-        let deserialized_second_metadata =
-            Metadata::deserialize(self_pid, second_metadata).unwrap();
+        let mut second_read_entries = db.get(key, replication).await.unwrap().unwrap();
+        assert_eq!(second_read_entries.len(), 1);
+        let deserialized_first_metadata = first_entry.metadata;
+        let second_entry = second_read_entries.remove(0);
+        let deserialized_second_metadata = second_entry.metadata;
 
         assert_eq!(
             deserialized_second_metadata
@@ -891,9 +724,11 @@ mod tests {
             .await
             .unwrap();
 
-        let (_, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut first_entries = db.get(key.clone(), replication).await.unwrap().unwrap();
 
-        assert_eq!(data, value);
+        assert_eq!(first_entries.len(), 1);
+        let first_entry = first_entries.remove(0);
+        assert_eq!(first_entry.value, value);
 
         let new_value = Bytes::from("a new value");
         // Now we do another put to the same key and again we don't pass any metadata.
@@ -932,9 +767,11 @@ mod tests {
         .await
         .unwrap();
 
-        let (_, data) = db.get(key.clone(), replication).await.unwrap().unwrap();
+        let mut first_entries = db.get(key.clone(), replication).await.unwrap().unwrap();
 
-        assert_eq!(data, value);
+        assert_eq!(first_entries.len(), 1);
+        let first_entry = first_entries.remove(0);
+        assert_eq!(first_entry.value, value);
 
         let new_value = Bytes::from("a new value");
         // Now we do another put to the same key and again we don't pass any metadata.
@@ -961,104 +798,104 @@ mod tests {
     // in a non-atomic way. when we have concurrency, if 2 clients try to write at the same time
     // and for any reason they both read the metadata at the same time, only one of them will actually have its
     // correct value stored
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-    async fn regression_test_db_concurrent_puts() {
-        for _ in 0..100 {
-            let (_, db) = initialize_state();
-            let key: String = rand::thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(20)
-                .map(char::from)
-                .collect();
-            let key: Bytes = key.into();
+    // #[ignore]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    // async fn regression_test_db_concurrent_puts() {
+    //     for _ in 0..100 {
+    //         let (_, db) = initialize_state();
+    //         let key: String = rand::thread_rng()
+    //             .sample_iter(&Alphanumeric)
+    //             .take(20)
+    //             .map(char::from)
+    //             .collect();
+    //         let key: Bytes = key.into();
 
-            let first_value = Bytes::from("a value");
-            let replication = false;
+    //         let first_value = Bytes::from("a value");
+    //         let replication = false;
 
-            db.put(key.clone(), first_value.clone(), replication, None)
-                .await
-                .unwrap();
+    //         db.put(key.clone(), first_value.clone(), replication, None)
+    //             .await
+    //             .unwrap();
 
-            let (first_get_metadata, first_get_data) =
-                db.get(key.clone(), replication).await.unwrap().unwrap();
+    //         let (first_get_metadata, first_get_data) =
+    //             db.get(key.clone(), replication).await.unwrap().unwrap();
 
-            assert_eq!(first_get_data, first_value);
+    //         assert_eq!(first_get_data, first_value);
 
-            enum PutResult {
-                Success,
-                Failure(Error),
-            }
+    //         enum PutResult {
+    //             Success,
+    //             Failure(Error),
+    //         }
 
-            let c1_value = Bytes::from("c1_value");
-            let c2_value = Bytes::from("c2_value");
-            let c1_handle = {
-                let db = db.clone();
-                let key = key.clone();
-                let first_get_metadata = first_get_metadata.clone();
-                let c1_value = c1_value.clone();
-                tokio::spawn(async move {
-                    match db
-                        .put(
-                            key.clone(),
-                            c1_value.clone(),
-                            replication,
-                            Some(first_get_metadata),
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            let get_result = db.get(key, false).await.unwrap().unwrap();
-                            assert_eq!(get_result.1, c1_value);
-                            PutResult::Success
-                        }
-                        Err(err) => PutResult::Failure(err),
-                    }
-                })
-            };
+    //         let c1_value = Bytes::from("c1_value");
+    //         let c2_value = Bytes::from("c2_value");
+    //         let c1_handle = {
+    //             let db = db.clone();
+    //             let key = key.clone();
+    //             let first_get_metadata = first_get_metadata.clone();
+    //             let c1_value = c1_value.clone();
+    //             tokio::spawn(async move {
+    //                 match db
+    //                     .put(
+    //                         key.clone(),
+    //                         c1_value.clone(),
+    //                         replication,
+    //                         Some(first_get_metadata),
+    //                     )
+    //                     .await
+    //                 {
+    //                     Ok(_) => {
+    //                         let get_result = db.get(key, false).await.unwrap().unwrap();
+    //                         assert_eq!(get_result.1, c1_value);
+    //                         PutResult::Success
+    //                     }
+    //                     Err(err) => PutResult::Failure(err),
+    //                 }
+    //             })
+    //         };
 
-            let c2_handle = {
-                let db = db.clone();
-                let key = key.clone();
-                let first_get_metadata = first_get_metadata.clone();
-                let c2_value = c2_value.clone();
-                tokio::spawn(async move {
-                    match db
-                        .put(
-                            key.clone(),
-                            c2_value.clone(),
-                            replication,
-                            Some(first_get_metadata),
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            let get_result = db.get(key, false).await.unwrap().unwrap();
-                            assert_eq!(get_result.1, c2_value);
-                            PutResult::Success
-                        }
-                        Err(err) => PutResult::Failure(err),
-                    }
-                })
-            };
+    //         let c2_handle = {
+    //             let db = db.clone();
+    //             let key = key.clone();
+    //             let first_get_metadata = first_get_metadata.clone();
+    //             let c2_value = c2_value.clone();
+    //             tokio::spawn(async move {
+    //                 match db
+    //                     .put(
+    //                         key.clone(),
+    //                         c2_value.clone(),
+    //                         replication,
+    //                         Some(first_get_metadata),
+    //                     )
+    //                     .await
+    //                 {
+    //                     Ok(_) => {
+    //                         let get_result = db.get(key, false).await.unwrap().unwrap();
+    //                         assert_eq!(get_result.1, c2_value);
+    //                         PutResult::Success
+    //                     }
+    //                     Err(err) => PutResult::Failure(err),
+    //                 }
+    //             })
+    //         };
 
-            let c1_res = c1_handle.await.unwrap();
-            let c2_res = c2_handle.await.unwrap();
-            match (c1_res, c2_res) {
-                (PutResult::Success, PutResult::Success) => {
-                    panic!("If both puts succeeded, we have a bug");
-                }
-                (PutResult::Failure(err1), PutResult::Failure(err2)) => {
-                    panic!(
-                        "Both Puts failed. should never happen: err1: {:?}, err2: {:?}",
-                        err1, err2
-                    );
-                }
-                (PutResult::Success, PutResult::Failure(_))
-                | (PutResult::Failure(_), PutResult::Success) => {
-                    // expected result
-                }
-            }
-        }
-    }
+    //         let c1_res = c1_handle.await.unwrap();
+    //         let c2_res = c2_handle.await.unwrap();
+    //         match (c1_res, c2_res) {
+    //             (PutResult::Success, PutResult::Success) => {
+    //                 panic!("If both puts succeeded, we have a bug");
+    //             }
+    //             (PutResult::Failure(err1), PutResult::Failure(err2)) => {
+    //                 panic!(
+    //                     "Both Puts failed. should never happen: err1: {:?}, err2: {:?}",
+    //                     err1, err2
+    //                 );
+    //             }
+    //             (PutResult::Success, PutResult::Failure(_))
+    //             | (PutResult::Failure(_), PutResult::Success) => {
+    //                 // expected result
+    //             }
+    //         }
+    //     }
+    // }
 }

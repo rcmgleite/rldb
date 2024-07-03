@@ -7,21 +7,25 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::{event, Level};
 
 use crate::{cluster::state::Node, error::Result, persistency::Db, server::message::IntoMessage};
 
 pub const CMD_CLUSTER_JOIN_CLUSTER: u32 = 101;
 
 /// JoinCluster deserialized [`crate::cmd::Command`]
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JoinCluster {
     known_cluster_node_addr: String,
+    request_id: String,
 }
 
 impl JoinCluster {
-    pub fn new(known_cluster_node_addr: String) -> Self {
+    pub fn new(known_cluster_node_addr: String, request_id: String) -> Self {
+        event!(Level::DEBUG, "request_id {}", request_id);
         Self {
             known_cluster_node_addr,
+            request_id,
         }
     }
 
@@ -50,13 +54,17 @@ impl IntoMessage for JoinCluster {
         Self::cmd_id()
     }
 
+    fn request_id(&self) -> String {
+        self.request_id.clone()
+    }
+
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
     }
 }
 
 /// Deserialized [`JoinCluster`] response payload.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JoinClusterResponse {
     message: String,
 }

@@ -130,7 +130,11 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
                 conn.write_all(&message.serialize()).await?;
             }
             Err(err) => {
-                let msg = Message::new(0, Some(Bytes::from(serde_json::to_string(&err).unwrap())));
+                let msg = Message::new(
+                    0,
+                    "UNKNOWN".to_string(),
+                    Some(Bytes::from(serde_json::to_string(&err).unwrap())),
+                );
                 conn.write_all(&msg.serialize()).await?;
             }
         }
@@ -146,6 +150,8 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
 ///  2. On the other hand, cmd.execute return a specific Response object per command which includes failure/success cases.
 async fn handle_message(conn: &mut TcpStream, db: Arc<Db>) -> Result<Message> {
     let message = Message::try_from_async_read(conn).await?;
+    let span = span!(Level::INFO, "cmd::execute", request_id = message.request_id);
     let cmd = Command::try_from_message(message)?;
-    Ok(cmd.execute(db.clone()).await)
+
+    Ok(cmd.execute(db.clone()).instrument(span).await)
 }

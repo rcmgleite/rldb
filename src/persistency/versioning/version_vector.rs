@@ -28,12 +28,26 @@ pub enum VersionVectorOrd {
 }
 
 /// The [`VersionVector`] definition
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Eq, Hash, Ord, PartialOrd)]
 pub struct VersionVector {
     id: ProcessId,
     // using a BtreeMap simply to make sure that the serialization of this structure into binary format
     // is consistent
     versions: BTreeMap<ProcessId, Version>,
+}
+
+impl std::fmt::Debug for VersionVector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VersionVector")
+            .field("versions", &self.versions)
+            .finish()
+    }
+}
+
+impl PartialEq for VersionVector {
+    fn eq(&self, other: &Self) -> bool {
+        self.versions == other.versions
+    }
 }
 
 impl VersionVector {

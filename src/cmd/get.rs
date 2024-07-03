@@ -17,28 +17,37 @@ pub struct Get {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
     replica: bool,
+    request_id: String,
 }
 
 impl Get {
     /// Constructs a new [`Get`] instance
-    pub fn new(key: Bytes) -> Self {
+    pub fn new(key: Bytes, request_id: String) -> Self {
         Self {
             key,
             replica: false,
+            request_id,
         }
     }
 
-    pub fn new_replica(key: Bytes) -> Self {
-        Self { key, replica: true }
+    pub fn new_replica(key: Bytes, request_id: String) -> Self {
+        Self {
+            key,
+            replica: true,
+            request_id,
+        }
     }
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
-    pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
+    pub async fn execute(self, db: Arc<Db>) -> Result<Vec<GetResponse>> {
         if let Some(resp) = db.get(self.key.clone(), self.replica).await? {
-            Ok(GetResponse {
-                value: resp.1,
-                metadata: hex::encode(resp.0),
-            })
+            Ok(resp
+                .into_iter()
+                .map(|entry| GetResponse {
+                    value: entry.value,
+                    metadata: hex::encode(entry.metadata.serialize()),
+                })
+                .collect())
         } else {
             Err(Error::NotFound { key: self.key })
         }
@@ -57,6 +66,10 @@ impl IntoMessage for Get {
 
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
+
+    fn request_id(&self) -> String {
+        self.request_id.clone()
     }
 }
 

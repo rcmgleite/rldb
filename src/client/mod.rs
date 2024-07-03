@@ -27,7 +27,7 @@ pub trait Client {
     /// Ping command interface
     async fn ping(&mut self) -> Result<PingResponse>;
     /// Get command interface
-    async fn get(&mut self, key: Bytes, replica: bool) -> Result<GetResponse>;
+    async fn get(&mut self, key: Bytes, replica: bool) -> Result<Vec<GetResponse>>;
     /// Put command interface
     async fn put(
         &mut self,

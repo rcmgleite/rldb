@@ -13,7 +13,7 @@ use crate::{
         put::PutResponse,
     },
     error::{Error, Result},
-    persistency::{metadata_evaluation, Metadata, MetadataEvaluation},
+    persistency::{storage::metadata_evaluation, Metadata, MetadataEvaluation},
     storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
 };
@@ -98,17 +98,17 @@ impl Client for MockClient {
     async fn ping(&mut self) -> Result<PingResponse> {
         todo!()
     }
-    async fn get(&mut self, key: Bytes, _replica: bool) -> Result<GetResponse> {
+    async fn get(&mut self, key: Bytes, _replica: bool) -> Result<Vec<GetResponse>> {
         let storage_guard = self.storage.lock().await;
         let metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
         let data = storage_guard.storage_engine.get(&key).await.unwrap();
         match (metadata, data) {
             (None, None) => Err(Error::NotFound { key }),
             (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
-            (Some(metadata), Some(data)) => Ok(GetResponse {
+            (Some(metadata), Some(data)) => Ok(vec![GetResponse {
                 value: data,
                 metadata: String::from_utf8(hex::encode(metadata).into_bytes()).unwrap(),
-            }),
+            }]),
         }
     }
     async fn put(

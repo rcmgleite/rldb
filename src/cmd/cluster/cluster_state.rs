@@ -12,9 +12,15 @@ pub const CMD_CLUSTER_CLUSTER_STATE: u32 = 102;
 
 /// ClusterState deserialized [`crate::cmd::Command`]
 #[derive(Default, Serialize, Deserialize)]
-pub struct ClusterState;
+pub struct ClusterState {
+    request_id: String,
+}
 
 impl ClusterState {
+    pub fn new(request_id: String) -> Self {
+        Self { request_id }
+    }
+
     /// Executes a [`ClusterState`] command.
     pub async fn execute(self, db: Arc<Db>) -> Result<ClusterStateResponse> {
         let cluster_state = db.cluster_state()?;
@@ -32,6 +38,10 @@ impl ClusterState {
 impl IntoMessage for ClusterState {
     fn id(&self) -> u32 {
         Self::cmd_id()
+    }
+
+    fn request_id(&self) -> String {
+        self.request_id.clone()
     }
 
     fn payload(&self) -> Option<Bytes> {

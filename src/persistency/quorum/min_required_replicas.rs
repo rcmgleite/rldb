@@ -69,7 +69,9 @@ impl<T, E> MinRequiredReplicas<T, E> {
 
 /// Note: T is now required to be clone. We expect this clone operation to be cheap (eg: calling clone on [`bytes::Bytes`]),
 /// otherwise this operation can get very expensive
-impl<T: Hash + Eq + Clone, E: std::error::Error> Quorum<T, E> for MinRequiredReplicas<T, E> {
+impl<T: Hash + Eq + Clone + std::fmt::Debug, E: std::error::Error> Quorum<T, E>
+    for MinRequiredReplicas<T, E>
+{
     fn update(&mut self, operation_status: OperationStatus<T, E>) -> Result<Evaluation<T>> {
         if self.remaining_replicas == 0 {
             return Err(Error::Logic { reason: "Calling `update` on MinRequiredReplicas Quorum more times than the total number of replicas. This is a bug".to_string() });

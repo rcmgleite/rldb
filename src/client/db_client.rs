@@ -1,6 +1,7 @@
 //! A concrete [`Client`] implementation for rldb
 use async_trait::async_trait;
 use bytes::Bytes;
+use rand::{distributions::Alphanumeric, Rng};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::{event, Level};
@@ -67,22 +68,22 @@ impl Client for DbClient {
     }
 
     async fn ping(&mut self) -> Result<PingResponse> {
-        let ping_cmd = cmd::ping::Ping;
+        let ping_cmd = cmd::ping::Ping::new(generate_request_id());
         let req = Message::from(ping_cmd).serialize();
 
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        event!(Level::DEBUG, "{:?}", response.payload.as_ref().unwrap());
+        event!(Level::TRACE, "{:?}", response.payload.as_ref().unwrap());
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn get(&mut self, key: Bytes, replica: bool) -> Result<GetResponse> {
+    async fn get(&mut self, key: Bytes, replica: bool) -> Result<Vec<GetResponse>> {
         let get_cmd = if replica {
-            cmd::get::Get::new_replica(key)
+            cmd::get::Get::new_replica(key, generate_request_id())
         } else {
-            cmd::get::Get::new(key)
+            cmd::get::Get::new(key, generate_request_id())
         };
 
         let req = Message::from(get_cmd).serialize();
@@ -102,9 +103,9 @@ impl Client for DbClient {
         replication: bool,
     ) -> Result<PutResponse> {
         let put_cmd = if replication {
-            cmd::put::Put::new_replication(key, value, metadata)
+            cmd::put::Put::new_replication(key, value, metadata, generate_request_id())
         } else {
-            cmd::put::Put::new(key, value, metadata)
+            cmd::put::Put::new(key, value, metadata, generate_request_id())
         };
         let req = Message::from(put_cmd).serialize();
 
@@ -114,7 +115,7 @@ impl Client for DbClient {
         let response = Message::try_from_async_read(conn).await?;
 
         event!(
-            Level::DEBUG,
+            Level::TRACE,
             "put response: {:?}",
             response.payload.as_ref().unwrap()
         );
@@ -123,7 +124,7 @@ impl Client for DbClient {
     }
 
     async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> Result<HeartbeatResponse> {
-        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
+        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes, generate_request_id());
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -137,7 +138,10 @@ impl Client for DbClient {
         &mut self,
         known_cluster_node_addr: String,
     ) -> Result<JoinClusterResponse> {
-        let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
+        let cmd = cmd::cluster::join_cluster::JoinCluster::new(
+            known_cluster_node_addr,
+            generate_request_id(),
+        );
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -148,7 +152,7 @@ impl Client for DbClient {
     }
 
     async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
-        let cmd = cmd::cluster::cluster_state::ClusterState;
+        let cmd = cmd::cluster::cluster_state::ClusterState::new(generate_request_id());
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -169,4 +173,14 @@ impl Factory for DbClientFactory {
 
         Ok(Box::new(client))
     }
+}
+
+// dummy function to generate request ids.. probably better to change this to uuid or some other good
+// requestid type
+fn generate_request_id() -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(10)
+        .map(char::from)
+        .collect()
 }

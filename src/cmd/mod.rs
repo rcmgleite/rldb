@@ -24,12 +24,14 @@ use tracing::{event, Level};
 
 use crate::{
     cmd::{
-        cluster::heartbeat::CMD_CLUSTER_HEARTBEAT, cluster::join_cluster::CMD_CLUSTER_JOIN_CLUSTER,
-        get::GET_CMD, ping::PING_CMD, put::PUT_CMD,
+        cluster::{heartbeat::CMD_CLUSTER_HEARTBEAT, join_cluster::CMD_CLUSTER_JOIN_CLUSTER},
+        get::GET_CMD,
+        ping::PING_CMD,
+        put::PUT_CMD,
     },
     error::{Error, InvalidRequest, Result},
     persistency::Db,
-    server::message::Message,
+    server::message::{IntoMessage, Message},
 };
 
 use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
@@ -77,35 +79,58 @@ impl Command {
     pub async fn execute(self, db: Arc<Db>) -> Message {
         match self {
             Command::Ping(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute().await;
-                Message::new(PING_CMD, Self::serialize_response_payload(payload))
+                Message::new(
+                    PING_CMD,
+                    request_id,
+                    Self::serialize_response_payload(payload),
+                )
             }
             Command::Get(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
-                Message::new(GET_CMD, Self::serialize_response_payload(payload))
+                Message::new(
+                    GET_CMD,
+                    request_id,
+                    Self::serialize_response_payload(payload),
+                )
             }
             Command::Put(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
-                Message::new(PUT_CMD, Self::serialize_response_payload(payload))
+                Message::new(
+                    PUT_CMD,
+                    request_id,
+                    Self::serialize_response_payload(payload),
+                )
             }
             Command::Heartbeat(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
                 Message::new(
                     CMD_CLUSTER_HEARTBEAT,
+                    request_id,
                     Self::serialize_response_payload(payload),
                 )
             }
             Command::JoinCluster(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
-                Message::new(
+                let res = Message::new(
                     CMD_CLUSTER_JOIN_CLUSTER,
+                    request_id,
                     Self::serialize_response_payload(payload),
-                )
+                );
+
+                res
             }
             Command::ClusterState(cmd) => {
+                let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
                 Message::new(
                     CMD_CLUSTER_CLUSTER_STATE,
+                    request_id,
                     Self::serialize_response_payload(payload),
                 )
             }
@@ -118,7 +143,7 @@ impl Command {
     /// returns an error if the payload doesn't conform with the specified [`Command`]
     pub fn try_from_message(message: Message) -> Result<Command> {
         match message.id {
-            PING_CMD => Ok(Command::Ping(ping::Ping)),
+            PING_CMD => Ok(Command::Ping(ping::Ping::new(message.request_id))),
             GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
                 message, GetCommand
             )?)),
@@ -163,7 +188,12 @@ mod tests {
 
     #[test]
     fn invalid_request_mixed_request_id() {
-        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let put_cmd = Put::new(
+            Bytes::from("foo"),
+            Bytes::from("bar"),
+            None,
+            "requestId".to_string(),
+        );
         let mut message = Message::from(put_cmd);
         message.id = Get::cmd_id();
 
@@ -178,7 +208,12 @@ mod tests {
 
     #[test]
     fn invalid_request_unrecognized_command() {
-        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let put_cmd = Put::new(
+            Bytes::from("foo"),
+            Bytes::from("bar"),
+            None,
+            "requestId".to_string(),
+        );
         let mut message = Message::from(put_cmd);
         message.id = 99999;
 
@@ -195,7 +230,12 @@ mod tests {
 
     #[test]
     fn invalid_request_empty_payload() {
-        let put_cmd = Put::new(Bytes::from("foo"), Bytes::from("bar"), None);
+        let put_cmd = Put::new(
+            Bytes::from("foo"),
+            Bytes::from("bar"),
+            None,
+            "requestId".to_string(),
+        );
         let mut message = Message::from(put_cmd);
         message.payload = None;
 
