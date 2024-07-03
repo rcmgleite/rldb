@@ -3,7 +3,7 @@ use crate::{
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::{collections::HashMap, mem::size_of, sync::Arc};
+use std::{mem::size_of, sync::Arc};
 use tracing::{event, Level};
 
 use super::{
@@ -89,24 +89,20 @@ impl Storage {
             current_versions
         );
 
-        let mut version_map = HashMap::<Metadata, StorageEntry>::new();
-        version_map.insert(
-            entry.metadata.clone(),
-            StorageEntry {
-                metadata: entry.metadata.clone(),
-                value: entry.value,
-            },
-        );
+        let mut entries_to_store = Vec::new();
+
+        entries_to_store.push(StorageEntry {
+            metadata: entry.metadata.clone(),
+            value: entry.value,
+        });
 
         for existing_entry in current_versions {
             if let super::MetadataEvaluation::Conflict =
                 metadata_evaluation(&entry.metadata, &existing_entry.metadata)?
             {
-                version_map.insert(existing_entry.metadata.clone(), existing_entry);
+                entries_to_store.push(existing_entry);
             }
         }
-
-        let entries_to_store = version_map.into_iter().map(|e| e.1).collect();
 
         event!(
             Level::INFO,
@@ -245,15 +241,17 @@ mod tests {
 
         store.put(key.clone(), entry_pid_1).await.unwrap();
 
-        let mut get_entries = store.get(key).await.unwrap();
+        let get_entries = store.get(key).await.unwrap();
 
         assert_eq!(get_entries.len(), 2);
-        let entry_0 = get_entries.remove(0);
-        assert_eq!(entry_0.value, value_pid_0);
-        assert_eq!(entry_0.metadata, metadata_pid_0);
-
-        let entry_1 = get_entries.remove(0);
-        assert_eq!(entry_1.value, value_pid_1);
-        assert_eq!(entry_1.metadata, metadata_pid_1);
+        for entry in get_entries {
+            if entry.metadata == metadata_pid_0 {
+                assert_eq!(entry.value, value_pid_0);
+            } else if entry.metadata == metadata_pid_1 {
+                assert_eq!(entry.value, value_pid_1);
+            } else {
+                panic!("should never happen");
+            }
+        }
     }
 }
