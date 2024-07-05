@@ -103,6 +103,7 @@ pub enum InvalidRequest {
     MessageReceivedWithoutRequestId,
     MessageRequestIdMustBeUtf8Encoded,
     MaxMessageSizeExceeded { max: u32, got: u32 },
+    MalformedContext,
     StaleContextProvided,
     EmptyContextWhenOverridingKey,
     ReplicationPutMustIncludeContext,

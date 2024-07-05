@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Get { port, key } => {
             let mut client = DbClient::new(format!("127.0.0.1:{}", port));
             client.connect().await?;
-            let response = client.get(key, false).await?;
+            let response = client.get(key).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;

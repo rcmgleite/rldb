@@ -9,6 +9,8 @@
 //! If you call update more than n_replicas times an error will be returned.
 use std::{collections::HashMap, hash::Hash};
 
+use tracing::{event, Level};
+
 use super::{Evaluation, OperationStatus, Quorum, QuorumResult};
 use crate::error::{Error, Result};
 
@@ -79,6 +81,7 @@ impl<T: Hash + Eq + Clone + std::fmt::Debug, E: std::error::Error> Quorum<T, E>
 
         match operation_status {
             OperationStatus::Success(item) => {
+                event!(Level::WARN, "DEBUG: {:?}", item);
                 {
                     let entry = self.successes.entry(item.clone()).or_insert(0);
                     *entry += 1;

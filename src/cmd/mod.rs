@@ -9,8 +9,9 @@ pub mod cluster;
 pub mod get;
 pub mod ping;
 pub mod put;
+pub mod replication_get;
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use bytes::Bytes;
 use cluster::cluster_state::ClusterState as ClusterStateCommand;
@@ -19,7 +20,8 @@ use cluster::join_cluster::JoinCluster as JoinClusterCommand;
 use get::Get as GetCommand;
 use ping::Ping as PingCommand;
 use put::Put as PutCommand;
-use serde::Serialize;
+use replication_get::ReplicationGet as ReplicationGetCommand;
+use serde::{Deserialize, Serialize};
 use tracing::{event, Level};
 
 use crate::{
@@ -28,10 +30,12 @@ use crate::{
         get::GET_CMD,
         ping::PING_CMD,
         put::PUT_CMD,
+        replication_get::REPLICATION_GET_CMD,
     },
     error::{Error, InvalidRequest, Result},
-    persistency::Db,
+    persistency::{versioning::version_vector::VersionVector, Db, Metadata},
     server::message::{IntoMessage, Message},
+    utils::serde_utf8_bytes,
 };
 
 use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
@@ -43,6 +47,7 @@ use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
 pub enum Command {
     Ping(PingCommand),
     Get(GetCommand),
+    ReplicationGet(ReplicationGetCommand),
     Put(PutCommand),
     Heartbeat(HeartbeatCommand),
     JoinCluster(JoinClusterCommand),
@@ -92,6 +97,15 @@ impl Command {
                 let payload = cmd.execute(db).await;
                 Message::new(
                     GET_CMD,
+                    request_id,
+                    Self::serialize_response_payload(payload),
+                )
+            }
+            Command::ReplicationGet(cmd) => {
+                let request_id = cmd.request_id();
+                let payload = cmd.execute(db).await;
+                Message::new(
+                    REPLICATION_GET_CMD,
                     request_id,
                     Self::serialize_response_payload(payload),
                 )
@@ -147,6 +161,10 @@ impl Command {
             GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
                 message, GetCommand
             )?)),
+            REPLICATION_GET_CMD => Ok(Command::ReplicationGet(try_from_message_with_payload!(
+                message,
+                ReplicationGetCommand
+            )?)),
             PUT_CMD => Ok(Command::Put(try_from_message_with_payload!(
                 message, PutCommand
             )?)),
@@ -177,6 +195,66 @@ impl Command {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SerializedContext(String);
+impl SerializedContext {
+    pub fn new(hex_encoded: String) -> Self {
+        Self(hex_encoded)
+    }
+
+    pub fn deserialize(self) -> Result<Context> {
+        let hex_decoded: Bytes = hex::decode(self.0)
+            .map_err(|_| Error::InvalidRequest(InvalidRequest::MalformedContext))?
+            .into();
+
+        Ok(Context {
+            versions: VersionVector::deserialize(0, hex_decoded)?,
+        })
+    }
+}
+
+impl Into<String> for SerializedContext {
+    fn into(self) -> String {
+        self.0
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct Context {
+    versions: VersionVector,
+}
+
+impl Context {
+    pub fn merge_metadata(&mut self, metadata: &Metadata) {
+        self.versions.merge(&metadata.versions);
+    }
+
+    pub fn serialize(self) -> SerializedContext {
+        SerializedContext(hex::encode(self.versions.serialize()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Value {
+    #[serde(with = "serde_utf8_bytes")]
+    value: Bytes,
+    crc32c: u32,
+}
+
+impl Value {
+    pub fn new(value: Bytes, crc32c: u32) -> Self {
+        Self { value, crc32c }
+    }
+}
+
+impl Deref for Value {
+    type Target = Bytes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Command;
@@ -188,14 +266,9 @@ mod tests {
 
     #[test]
     fn invalid_request_mixed_request_id() {
-        let put_cmd = Put::new(
-            Bytes::from("foo"),
-            Bytes::from("bar"),
-            None,
-            "requestId".to_string(),
-        );
+        let put_cmd = Get::new(Bytes::from("foo"), "fake requestId".to_string());
         let mut message = Message::from(put_cmd);
-        message.id = Get::cmd_id();
+        message.id = Put::cmd_id();
 
         let err = Command::try_from_message(message).err().unwrap();
         match err {

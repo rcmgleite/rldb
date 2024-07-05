@@ -11,7 +11,6 @@ use rldb::{
     client::{db_client::DbClient, Client},
     cluster::state::NodeStatus,
     error::{self, InvalidRequest},
-    persistency::Metadata,
     server::Server,
 };
 use tokio::{
@@ -141,17 +140,10 @@ async fn test_cluster_put_get_success() {
             .unwrap();
         assert_eq!(response.message, "Ok".to_string());
 
-        let mut values = client.get(key, false).await.unwrap();
-        assert_eq!(values.len(), 1);
-        let first_entry = values.remove(0);
-        assert_eq!(first_entry.value, value);
-
-        // TODO: unclear if we should assert on the metadata at this level..
-        // might be better to just make sure we can deserialize it and leave specific tests for
-        // the Metadata component itself
-        let hex_decoded_metadata = hex::decode(first_entry.metadata).unwrap();
-        let metadata = Metadata::deserialize(0, hex_decoded_metadata.into()).unwrap();
-        assert_eq!(metadata.versions.n_versions(), 1);
+        let mut resp = client.get(key).await.unwrap();
+        assert_eq!(resp.values.len(), 1);
+        let first_entry = resp.values.remove(0);
+        assert_eq!(*first_entry, value);
     }
 
     stop_servers(handles).await;
@@ -194,26 +186,24 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 
     for i in 1..clients.len() {
         let client = &mut clients[i];
-        let mut values = client.get(key.clone(), false).await.unwrap();
+        let resp = client.get(key.clone()).await.unwrap();
+        let mut values = resp.values.clone();
 
         assert_eq!(values.len(), 1);
         let entry = values.remove(0);
-        assert_eq!(entry.value, value);
+        assert_eq!(*entry, value);
         client
-            .put(key.clone(), value.clone(), Some(entry.metadata), false)
+            .put(key.clone(), value.clone(), Some(resp.context), false)
             .await
             .unwrap();
     }
 
     let client = &mut clients[0];
-    let mut values = client.get(key.clone(), false).await.unwrap();
+    let resp = client.get(key.clone()).await.unwrap();
+    let mut values = resp.values.clone();
     assert_eq!(values.len(), 1);
     let entry = values.remove(0);
-    assert_eq!(entry.value, value);
-    let hex_decoded_metadata = hex::decode(entry.metadata).unwrap();
-    let metadata = Metadata::deserialize(0, hex_decoded_metadata.into()).unwrap();
-    // FIXME: don't hardcode
-    assert_eq!(metadata.versions.n_versions(), 3);
+    assert_eq!(*entry, value);
 
     stop_servers(handles).await;
 }
@@ -265,12 +255,16 @@ async fn test_cluster_update_key_concurrently() {
         let saw_failure = saw_failure.clone();
         let mut client = clients.remove(0);
         client_handles.push(tokio::spawn(async move {
-            let mut get_response = client.get(key.clone(), false).await.unwrap();
-            assert_eq!(get_response.len(), 1);
-            let get_entry = get_response.remove(0);
+            let get_response = client.get(key.clone()).await.unwrap();
+            assert_eq!(get_response.values.len(), 1);
 
             match client
-                .put(key.clone(), value.clone(), Some(get_entry.metadata), false)
+                .put(
+                    key.clone(),
+                    value.clone(),
+                    Some(get_response.context),
+                    false,
+                )
                 .await
             {
                 Err(err) => match err {
@@ -309,10 +303,10 @@ async fn test_cluster_update_key_concurrently() {
         let mut client = DbClient::new(handles[i].client_listener_addr.clone());
         client.connect().await.unwrap();
 
-        let get_result = client.get(key.clone(), false).await.unwrap();
-        assert_eq!(get_result.len(), 3);
-        for v in get_result {
-            returned_values.insert(v.value);
+        let get_result = client.get(key.clone()).await.unwrap();
+        assert_eq!(get_result.values.len(), 3);
+        for v in get_result.values {
+            returned_values.insert(v);
         }
     }
 
@@ -345,8 +339,8 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
 
     assert_eq!(response.message, "Ok".to_string());
 
-    let first_get_response = client.get(key.clone(), false).await.unwrap();
-    assert_eq!(first_get_response.len(), 1);
+    let first_get_response = client.get(key.clone()).await.unwrap();
+    assert_eq!(first_get_response.values.len(), 1);
 
     let mut client_handles = Vec::new();
 
@@ -361,12 +355,16 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
         let key = key.clone();
         let mut client = clients.remove(0);
         client_handles.push(tokio::spawn(async move {
-            let mut get_response = client.get(key.clone(), false).await.unwrap();
-            assert_eq!(get_response.len(), 1);
-            let get_entry = get_response.remove(0);
+            let get_response = client.get(key.clone()).await.unwrap();
+            assert_eq!(get_response.values.len(), 1);
 
             match client
-                .put(key.clone(), value.clone(), Some(get_entry.metadata), false)
+                .put(
+                    key.clone(),
+                    value.clone(),
+                    Some(get_response.context),
+                    false,
+                )
                 .await
             {
                 Err(err) => match err {
@@ -401,10 +399,10 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
         let mut client = DbClient::new(handles[i].client_listener_addr.clone());
         client.connect().await.unwrap();
 
-        let get_result = client.get(key.clone(), false).await.unwrap();
-        assert_eq!(get_result.len(), 3);
-        for v in get_result {
-            returned_values.insert(v.value);
+        let get_result = client.get(key.clone()).await.unwrap();
+        assert_eq!(get_result.values.len(), 3);
+        for v in get_result.values {
+            returned_values.insert(v);
         }
     }
 
@@ -415,6 +413,7 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
 
 #[tokio::test]
 async fn test_cluster_stale_context_provided() {
+    tracing_subscriber::fmt::init();
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 3]).await;
 
@@ -434,26 +433,26 @@ async fn test_cluster_stale_context_provided() {
         .unwrap();
 
     assert_eq!(response.message, "Ok".to_string());
-    let mut first_get_entries = client.get(key.clone(), false).await.unwrap();
-    assert_eq!(first_get_entries.len(), 1);
-    let first_entry = first_get_entries.remove(0);
-    assert_eq!(first_entry.value, value_for_first_put);
+    let mut first_get_response = client.get(key.clone()).await.unwrap();
+    assert_eq!(first_get_response.values.len(), 1);
+    let first_entry = first_get_response.values.remove(0);
+    assert_eq!(*first_entry, value_for_first_put);
 
     let value_for_second_put = Bytes::from("Second Put");
     client
         .put(
             key.clone(),
             value_for_second_put.clone(),
-            Some(first_entry.metadata.clone()),
+            Some(first_get_response.context.clone()),
             false,
         )
         .await
         .unwrap();
 
-    let mut second_get_entries = client.get(key.clone(), false).await.unwrap();
-    assert_eq!(second_get_entries.len(), 1);
-    let second_entry = second_get_entries.remove(0);
-    assert_eq!(second_entry.value, value_for_second_put);
+    let mut second_get_response = client.get(key.clone()).await.unwrap();
+    assert_eq!(second_get_response.values.len(), 1);
+    let second_entry = second_get_response.values.remove(0);
+    assert_eq!(*second_entry, value_for_second_put);
 
     // now we try a third update with the first_get_resposne metadata - this must fail
     let value_for_third_put = Bytes::from("Third Put");
@@ -461,7 +460,7 @@ async fn test_cluster_stale_context_provided() {
         .put(
             key.clone(),
             value_for_third_put.clone(),
-            Some(first_entry.metadata),
+            Some(first_get_response.context),
             false,
         )
         .await
@@ -470,10 +469,10 @@ async fn test_cluster_stale_context_provided() {
 
     assert!(err.is_stale_context_provided());
 
-    let mut final_get_entries = client.get(key, false).await.unwrap();
-    assert_eq!(final_get_entries.len(), 1);
-    let final_get_entry = final_get_entries.remove(0);
-    assert_eq!(final_get_entry.value, value_for_second_put);
+    let mut final_get_response = client.get(key).await.unwrap();
+    assert_eq!(final_get_response.values.len(), 1);
+    let final_get_entry = final_get_response.values.remove(0);
+    assert_eq!(*final_get_entry, value_for_second_put);
 
     stop_servers(handles).await;
 }
@@ -490,7 +489,7 @@ async fn test_cluster_key_not_found() {
     let key = Bytes::from("foo");
 
     let client = &mut clients[0];
-    let err = client.get(key, false).await.err().unwrap();
+    let err = client.get(key).await.err().unwrap();
 
     match err {
         Error::NotFound { key: _ } => {}
@@ -564,7 +563,7 @@ async fn test_cluster_get_no_quorum() {
     handle.task_handle.await.unwrap();
 
     let client = &mut clients[0];
-    let err = client.get(key, false).await.err().unwrap();
+    let err = client.get(key).await.err().unwrap();
     match err {
         Error::QuorumNotReached {
             operation,

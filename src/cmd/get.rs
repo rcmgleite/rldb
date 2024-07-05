@@ -1,4 +1,13 @@
 //! Get [`crate::cmd::Command`]
+//!
+//! This is a client facing command that returns [0..n] values.
+//! When more than one value is returned associated with the same key, it means that a Conflict during [`crate::cmd::put::Put`] occurred.
+//! To resolve the conflict, the Get response will include what is called a "Context".
+//! A context is a bag of information that can only be deserialized by the server.
+//! As a client, what you do to resolve a conflict is
+//!  1. Do a Get and receive multiple values + a context as response
+//!  2. Choose which value should be kept and send a new PUT passing the context received on GET as argument
+//! The server then uses the Context to properly resolve the conflict.
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -6,9 +15,11 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::persistency::{Db, Metadata};
+use crate::persistency::Db;
 use crate::server::message::IntoMessage;
-use crate::utils::{serde_utf8_bytes, serde_vec_utf8_bytes};
+use crate::utils::serde_utf8_bytes;
+
+use super::{Context, Value};
 
 pub const GET_CMD: u32 = 2;
 
@@ -16,38 +27,30 @@ pub const GET_CMD: u32 = 2;
 pub struct Get {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
-    replica: bool,
     request_id: String,
 }
 
 impl Get {
     /// Constructs a new [`Get`] instance
     pub fn new(key: Bytes, request_id: String) -> Self {
-        Self {
-            key,
-            replica: false,
-            request_id,
-        }
-    }
-
-    pub fn new_replica(key: Bytes, request_id: String) -> Self {
-        Self {
-            key,
-            replica: true,
-            request_id,
-        }
+        Self { key, request_id }
     }
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
+    ///
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
-        let res = db.get(self.key.clone(), self.replica).await?;
+        let res = db.get(self.key.clone(), false).await?;
+        // TODO: Include the proper crc of the value that has to be provided by storage
+        let values = res.iter().map(|e| Value::new(e.value.clone(), 0)).collect();
+        let context = res.iter().fold(Context::default(), |mut acc, e| {
+            acc.merge_metadata(&e.metadata);
+            acc
+        });
 
-        // TODOs:
-        // 1. Metadata merge - remember that now we need to properly think about the Context abstraction as opposed to
-        //  using Metadata directly
-        // 2. generate the proper GetResponse
-        // 3. likely create another GET API used internally?
-        todo!()
+        Ok(GetResponse {
+            values,
+            context: context.serialize().into(),
+        })
     }
 
     /// returns the cmd id for [`Get`]
@@ -71,21 +74,9 @@ impl IntoMessage for Get {
 }
 
 /// The struct that represents a [`Get`] response payload
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct GetResponse {
-    #[serde(with = "serde_vec_utf8_bytes")]
-    pub value: Vec<Bytes>,
-    /// A hex encoded representation of the object metadata
-    pub metadata: String,
-}
-
-impl std::fmt::Debug for GetResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let meta =
-            Metadata::deserialize(0, hex::decode(self.metadata.clone()).unwrap().into()).unwrap();
-        f.debug_struct("GetResponse")
-            .field("value", &self.value)
-            .field("metadata", &meta)
-            .finish()
-    }
+    pub values: Vec<Value>,
+    /// A hex encoded - opaque byte array used to object versioning
+    pub context: String,
 }

@@ -5,6 +5,7 @@
 use std::{collections::BTreeMap, mem::size_of};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
@@ -28,7 +29,7 @@ pub enum VersionVectorOrd {
 }
 
 /// The [`VersionVector`] definition
-#[derive(Clone, Eq, Hash, Ord, PartialOrd)]
+#[derive(Default, Clone, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct VersionVector {
     id: ProcessId,
     // using a BtreeMap simply to make sure that the serialization of this structure into binary format

@@ -1,8 +1,10 @@
 use crate::{
     error::{Error, InvalidRequest, Result},
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
+    utils::serde_utf8_bytes,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 use std::{mem::size_of, sync::Arc};
 use tracing::{event, Level};
 
@@ -37,8 +39,9 @@ pub struct Storage {
 }
 
 ///
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct StorageEntry {
+    #[serde(with = "serde_utf8_bytes")]
     pub value: Bytes,
     pub metadata: Metadata,
 }

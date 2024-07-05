@@ -9,6 +9,7 @@ use crate::{
         get::GetResponse,
         ping::PingResponse,
         put::PutResponse,
+        replication_get::ReplicationGetResponse,
     },
     error::Result,
 };
@@ -27,7 +28,9 @@ pub trait Client {
     /// Ping command interface
     async fn ping(&mut self) -> Result<PingResponse>;
     /// Get command interface
-    async fn get(&mut self, key: Bytes, replica: bool) -> Result<Vec<GetResponse>>;
+    async fn get(&mut self, key: Bytes) -> Result<GetResponse>;
+    /// ReplicationGet command interface
+    async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse>;
     /// Put command interface
     async fn put(
         &mut self,

@@ -5,6 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use storage::{Storage, StorageEngine, StorageEntry};
 use tokio::sync::Mutex as AsyncMutex;
@@ -96,7 +97,7 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
     murmur3_hash(addr)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Metadata {
     // version vector of this object
     pub versions: VersionVector,
@@ -382,7 +383,7 @@ impl Db {
             while let Some(res) = futures.next().await {
                 match res {
                     Ok(res) => {
-                        event!(Level::DEBUG, "GET Got result for quorum: {:?}", res);
+                        event!(Level::INFO, "GET Got result for quorum: {:?}", res);
 
                         let _ = quorum.update(OperationStatus::Success(res));
                     }
@@ -403,8 +404,11 @@ impl Db {
             match quorum_result.evaluation {
                 Evaluation::Reached(value) => Ok(value),
                 Evaluation::NotReached | Evaluation::Unreachable => {
-                    if quorum_result.failures.iter().all(|err| err.is_not_found()) {
-                        return Err(Error::NotFound { key: key.clone() });
+                    let failure_iter = quorum_result.failures.iter();
+                    if failure_iter.size_hint().0 > 0 {
+                        if quorum_result.failures.iter().all(|err| err.is_not_found()) {
+                            return Err(Error::NotFound { key: key.clone() });
+                        }
                     }
 
                     Err(Error::QuorumNotReached {
@@ -446,19 +450,7 @@ impl Db {
                 })?)
                 .await?;
 
-            let resp = client.get(key.clone(), true).await?;
-            // FIXME: remove unwrap()
-            Ok(resp
-                .into_iter()
-                .map(|entry| StorageEntry {
-                    value: entry.value,
-                    metadata: Metadata::deserialize(
-                        self.own_state.pid(),
-                        hex::decode(entry.metadata).unwrap().into(),
-                    )
-                    .unwrap(),
-                })
-                .collect())
+            Ok(client.replication_get(key.clone()).await?.values)
         }
     }
 

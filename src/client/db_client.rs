@@ -6,7 +6,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::{event, Level};
 
-use crate::cluster::state::Node;
 use crate::cmd;
 use crate::cmd::cluster::cluster_state::ClusterStateResponse;
 use crate::cmd::cluster::heartbeat::HeartbeatResponse;
@@ -15,6 +14,7 @@ use crate::cmd::get::GetResponse;
 use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
 use crate::server::message::Message;
+use crate::{cluster::state::Node, cmd::replication_get::ReplicationGetResponse};
 
 use super::{Client, Factory};
 use crate::error::{Error, Result};
@@ -79,18 +79,24 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
-    async fn get(&mut self, key: Bytes, replica: bool) -> Result<Vec<GetResponse>> {
-        let get_cmd = if replica {
-            cmd::get::Get::new_replica(key, generate_request_id())
-        } else {
-            cmd::get::Get::new(key, generate_request_id())
-        };
+    async fn get(&mut self, key: Bytes) -> Result<GetResponse> {
+        let get_cmd = cmd::get::Get::new(key, generate_request_id());
 
         let req = Message::from(get_cmd).serialize();
 
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
 
+        let response = Message::try_from_async_read(conn).await?;
+        serde_json::from_slice(&response.payload.unwrap())?
+    }
+
+    async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse> {
+        let replication_get_cmd =
+            cmd::replication_get::ReplicationGet::new(key, generate_request_id());
+        let req = Message::from(replication_get_cmd).serialize();
+        let conn = self.get_conn_mut()?;
+        conn.write_all(&req).await?;
         let response = Message::try_from_async_read(conn).await?;
         serde_json::from_slice(&response.payload.unwrap())?
     }
