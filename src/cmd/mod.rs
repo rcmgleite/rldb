@@ -33,7 +33,10 @@ use crate::{
         replication_get::REPLICATION_GET_CMD,
     },
     error::{Error, InvalidRequest, Result},
-    persistency::{versioning::version_vector::VersionVector, Db, Metadata},
+    persistency::{
+        versioning::version_vector::{ProcessId, VersionVector},
+        Db, Metadata,
+    },
     server::message::{IntoMessage, Message},
     utils::serde_utf8_bytes,
 };
@@ -195,21 +198,27 @@ impl Command {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SerializedContext(String);
 impl SerializedContext {
     pub fn new(hex_encoded: String) -> Self {
         Self(hex_encoded)
     }
 
-    pub fn deserialize(self) -> Result<Context> {
+    pub fn deserialize(self, pid: ProcessId) -> Result<Context> {
         let hex_decoded: Bytes = hex::decode(self.0)
             .map_err(|_| Error::InvalidRequest(InvalidRequest::MalformedContext))?
             .into();
 
         Ok(Context {
-            versions: VersionVector::deserialize(0, hex_decoded)?,
+            versions: VersionVector::deserialize(pid, hex_decoded)?,
         })
+    }
+}
+
+impl From<String> for SerializedContext {
+    fn from(v: String) -> Self {
+        Self(v)
     }
 }
 
@@ -226,11 +235,25 @@ pub struct Context {
 
 impl Context {
     pub fn merge_metadata(&mut self, metadata: &Metadata) {
-        self.versions.merge(&metadata.versions);
+        self.versions.merge(&metadata.version);
     }
 
     pub fn serialize(self) -> SerializedContext {
         SerializedContext(hex::encode(self.versions.serialize()))
+    }
+
+    pub fn into_metadata(self) -> Metadata {
+        Metadata {
+            version: self.versions,
+        }
+    }
+}
+
+impl From<Metadata> for Context {
+    fn from(value: Metadata) -> Self {
+        Self {
+            versions: value.version,
+        }
     }
 }
 

@@ -20,6 +20,7 @@ pub mod versioning;
 use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
+    cmd::{Context, SerializedContext},
     error::{Error, Internal, InvalidRequest, Result},
 };
 
@@ -97,10 +98,10 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
     murmur3_hash(addr)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Metadata {
     // version vector of this object
-    pub versions: VersionVector,
+    pub version: VersionVector,
 }
 
 pub(crate) enum MetadataEvaluation {
@@ -116,8 +117,8 @@ impl Metadata {
     /// we might need a better abstratction/data structure to deal with the properly
     pub fn serialize(&self) -> Bytes {
         let mut buf = BytesMut::new();
-        buf.put_u32(self.versions.serialized_size() as u32);
-        buf.put_slice(&self.versions.serialize());
+        buf.put_u32(self.version.serialized_size() as u32);
+        buf.put_slice(&self.version.serialize());
 
         buf.freeze()
     }
@@ -126,7 +127,7 @@ impl Metadata {
         let serialized_size = serialized.get_u32() as usize;
         serialized.truncate(serialized_size);
         Ok(Metadata {
-            versions: VersionVector::deserialize(self_pid, serialized)?,
+            version: VersionVector::deserialize(self_pid, serialized)?,
         })
     }
 }
@@ -173,7 +174,7 @@ impl Db {
         key: Bytes,
         value: Bytes,
         replication: bool,
-        metadata: Option<Bytes>,
+        context: Option<SerializedContext>,
     ) -> Result<()> {
         let preference_list = self.cluster_state.preference_list(&key)?;
         if replication {
@@ -187,11 +188,15 @@ impl Db {
                 }));
             }
 
-            let metadata = metadata.ok_or(Error::InvalidRequest(
+            let context = context.ok_or(Error::InvalidRequest(
                 InvalidRequest::ReplicationPutMustIncludeContext,
             ))?;
 
             // if this is a replication PUT, we don't have to deal with quorum
+            let metadata = context
+                .deserialize(self.own_state.pid())?
+                .into_metadata()
+                .serialize();
             self.local_put(
                 key,
                 value,
@@ -220,26 +225,23 @@ impl Db {
                 })?)
                 .await?;
 
-            let _ = client
-                .put(key.clone(), value, metadata.map(hex::encode), false)
-                .await?;
+            let _ = client.put(key.clone(), value, context, false).await?;
         } else {
             event!(Level::DEBUG, "Executing a coordinator Put");
-            let mut metadata = if let Some(metadata) = metadata {
-                Metadata::deserialize(self.own_state.pid(), metadata)?
+            let mut metadata = if let Some(context) = context {
+                context.deserialize(self.own_state.pid())?.into_metadata()
             } else {
                 Metadata {
-                    versions: VersionVector::new(self.own_state.pid()),
+                    version: VersionVector::new(self.own_state.pid()),
                 }
             };
 
-            metadata.versions.increment();
+            metadata.version.increment();
 
             // if this is not a replication PUT, we have to honor quorum before returning a success
             // if we have a quorum config, we have to make sure we wrote to enough replicas
             let quorum_config = self.cluster_state.quorum_config();
-            let mut quorum =
-                MinRequiredReplicas::new(quorum_config.replicas, quorum_config.writes)?;
+            let mut quorum = MinRequiredReplicas::new(quorum_config.writes)?;
             let mut futures = FuturesUnordered::new();
 
             // the preference list will contain the node itself (otherwise there's a bug).
@@ -271,12 +273,11 @@ impl Db {
 
             match quorum_result.evaluation {
                 Evaluation::Reached(_) => {}
-                Evaluation::NotReached | Evaluation::Unreachable => {
+                Evaluation::NotReached => {
                     event!(
                         Level::WARN,
-                        "quorum not reached: failures: {:?} out of {}",
+                        "quorum not reached: failures: {:?}",
                         quorum_result.failures,
-                        quorum_result.total
                     );
                     return Err(Error::QuorumNotReached {
                         operation: "Put".to_string(),
@@ -337,7 +338,7 @@ impl Db {
                 .put(
                     key.clone(),
                     value,
-                    Some(hex::encode(metadata.serialize())),
+                    Some(Context::from(metadata).serialize()),
                     true,
                 )
                 .await?;
@@ -364,7 +365,7 @@ impl Db {
         } else {
             event!(Level::DEBUG, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
-            let mut quorum = MinRequiredReplicas::new(quorum_config.replicas, quorum_config.reads)?;
+            let mut quorum = MinRequiredReplicas::new(quorum_config.reads)?;
 
             let mut futures = FuturesUnordered::new();
             let preference_list = self.preference_list(&key)?;
@@ -385,7 +386,9 @@ impl Db {
                     Ok(res) => {
                         event!(Level::INFO, "GET Got result for quorum: {:?}", res);
 
-                        let _ = quorum.update(OperationStatus::Success(res));
+                        for entry in res {
+                            let _ = quorum.update(OperationStatus::Success(entry));
+                        }
                     }
                     Err(err) => {
                         event!(
@@ -403,7 +406,7 @@ impl Db {
             event!(Level::DEBUG, "Get quorum result: {:?}", quorum_result);
             match quorum_result.evaluation {
                 Evaluation::Reached(value) => Ok(value),
-                Evaluation::NotReached | Evaluation::Unreachable => {
+                Evaluation::NotReached => {
                     let failure_iter = quorum_result.failures.iter();
                     if failure_iter.size_hint().0 > 0 {
                         if quorum_result.failures.iter().all(|err| err.is_not_found()) {
@@ -483,6 +486,7 @@ mod tests {
     use crate::{
         client::mock::MockClientFactoryBuilder,
         cluster::state::{Node, State},
+        cmd::Context,
         error::{Error, InvalidRequest},
         persistency::{
             partitioning::consistent_hashing::ConsistentHashing, process_id,
@@ -551,9 +555,9 @@ mod tests {
         let self_pid = process_id(&local_addr);
         let deserialized_metadata = entry.metadata;
         let mut expected_metadata = Metadata {
-            versions: VersionVector::new(self_pid),
+            version: VersionVector::new(self_pid),
         };
-        expected_metadata.versions.increment();
+        expected_metadata.version.increment();
 
         assert_eq!(deserialized_metadata, expected_metadata);
     }
@@ -586,15 +590,15 @@ mod tests {
         let value = Bytes::from("a value");
         let replication = false;
         let mut initial_metadata = Metadata {
-            versions: VersionVector::new(1), // any random number would do
+            version: VersionVector::new(1), // any random number would do
         };
-        initial_metadata.versions.increment();
+        initial_metadata.version.increment();
 
         db.put(
             key.clone(),
             value.clone(),
             replication,
-            Some(initial_metadata.serialize()),
+            Some(Context::from(initial_metadata.clone()).serialize()),
         )
         .await
         .unwrap();
@@ -610,7 +614,7 @@ mod tests {
         let mut expected_metadata =
             Metadata::deserialize(self_pid, initial_metadata.serialize()).unwrap();
 
-        expected_metadata.versions.increment();
+        expected_metadata.version.increment();
 
         assert_eq!(deserialized_metadata, expected_metadata);
     }
@@ -683,7 +687,8 @@ mod tests {
             key.clone(),
             new_value.clone(),
             replication,
-            Some(first_entry.metadata.serialize()),
+            // Some(first_entry.metadata.serialize()),
+            Some(Context::from(first_entry.metadata.clone()).serialize()),
         )
         .await
         .unwrap();
@@ -696,8 +701,8 @@ mod tests {
 
         assert_eq!(
             deserialized_second_metadata
-                .versions
-                .causality(&deserialized_first_metadata.versions),
+                .version
+                .causality(&deserialized_first_metadata.version),
             VersionVectorOrd::HappenedAfter
         );
     }
@@ -741,18 +746,18 @@ mod tests {
 
         let self_pid = process_id(&local_addr);
         let mut first_metadata = Metadata {
-            versions: VersionVector::new(self_pid),
+            version: VersionVector::new(self_pid),
         };
 
-        first_metadata.versions.increment();
-        first_metadata.versions.increment();
+        first_metadata.version.increment();
+        first_metadata.version.increment();
 
         // This put without metadata will generate the first metadata
         db.put(
             key.clone(),
             value.clone(),
             replication,
-            Some(first_metadata.serialize()),
+            Some(Context::from(first_metadata.clone()).serialize()),
         )
         .await
         .unwrap();
@@ -771,7 +776,7 @@ mod tests {
                 key.clone(),
                 new_value.clone(),
                 replication,
-                Some(first_metadata.serialize()),
+                Some(Context::from(first_metadata).serialize()),
             )
             .await
             .err()

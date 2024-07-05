@@ -6,13 +6,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::{event, Level};
 
-use crate::cmd;
 use crate::cmd::cluster::cluster_state::ClusterStateResponse;
 use crate::cmd::cluster::heartbeat::HeartbeatResponse;
 use crate::cmd::cluster::join_cluster::JoinClusterResponse;
 use crate::cmd::get::GetResponse;
 use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
+use crate::cmd::{self, SerializedContext};
 use crate::server::message::Message;
 use crate::{cluster::state::Node, cmd::replication_get::ReplicationGetResponse};
 
@@ -105,7 +105,7 @@ impl Client for DbClient {
         &mut self,
         key: Bytes,
         value: Bytes,
-        metadata: Option<String>,
+        metadata: Option<SerializedContext>,
         replication: bool,
     ) -> Result<PutResponse> {
         let put_cmd = if replication {

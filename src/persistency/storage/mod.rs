@@ -47,7 +47,7 @@ pub struct StorageEntry {
 }
 
 pub(crate) fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluation> {
-    match lhs.versions.causality(&rhs.versions) {
+    match lhs.version.causality(&rhs.version) {
         VersionVectorOrd::HappenedBefore | VersionVectorOrd::Equals => {
             // the data we are trying to store is actually older than what's already stored.
             // This can happen due to read repair and active anti-entropy processes for instance.
@@ -218,10 +218,10 @@ mod tests {
         let value_pid_0 = Bytes::from("value 0");
 
         let mut metadata_pid_0 = Metadata {
-            versions: VersionVector::new(0),
+            version: VersionVector::new(0),
         };
 
-        metadata_pid_0.versions.increment();
+        metadata_pid_0.version.increment();
 
         let entry_pid_0 = StorageEntry {
             value: value_pid_0.clone(),
@@ -231,10 +231,10 @@ mod tests {
         store.put(key.clone(), entry_pid_0).await.unwrap();
 
         let mut metadata_pid_1 = Metadata {
-            versions: VersionVector::new(1),
+            version: VersionVector::new(1),
         };
 
-        metadata_pid_1.versions.increment();
+        metadata_pid_1.version.increment();
 
         let value_pid_1 = Bytes::from("value 1");
         let entry_pid_1 = StorageEntry {

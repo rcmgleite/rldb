@@ -8,7 +8,9 @@ use tracing::{span, Instrument, Level};
 use crate::error::Result;
 use crate::persistency::Db;
 use crate::server::message::IntoMessage;
-use crate::utils::{serde_hex_bytes, serde_utf8_bytes};
+use crate::utils::serde_utf8_bytes;
+
+use super::SerializedContext;
 
 pub const PUT_CMD: u32 = 3;
 
@@ -20,41 +22,43 @@ pub struct Put {
     #[serde(with = "serde_utf8_bytes")]
     value: Bytes,
     replication: bool,
-    #[serde(with = "serde_hex_bytes")]
-    metadata: Option<Bytes>,
+    context: Option<SerializedContext>,
     request_id: String,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
-    pub fn new(key: Bytes, value: Bytes, metadata: Option<String>, request_id: String) -> Self {
-        Self::new_private(key, value, metadata, false, request_id)
+    pub fn new(
+        key: Bytes,
+        value: Bytes,
+        context: Option<SerializedContext>,
+        request_id: String,
+    ) -> Self {
+        Self::new_private(key, value, context, false, request_id)
     }
 
     /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
     pub fn new_replication(
         key: Bytes,
         value: Bytes,
-        metadata: Option<String>,
+        context: Option<SerializedContext>,
         request_id: String,
     ) -> Self {
-        Self::new_private(key, value, metadata, true, request_id)
+        Self::new_private(key, value, context, true, request_id)
     }
 
     fn new_private(
         key: Bytes,
         value: Bytes,
-        metadata: Option<String>,
+        context: Option<SerializedContext>,
         replication: bool,
         request_id: String,
     ) -> Self {
-        let metadata: Option<Bytes> = metadata.map(|m| hex::decode(m).unwrap().into());
-
         Self {
             key,
             value,
             replication,
-            metadata,
+            context,
             request_id,
         }
     }
@@ -62,7 +66,7 @@ impl Put {
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
         let span = span!(Level::INFO, "persistency::put", key=?self.key, value=?self.value);
-        db.put(self.key, self.value, self.replication, self.metadata)
+        db.put(self.key, self.value, self.replication, self.context)
             .instrument(span)
             .await?;
         Ok(PutResponse {

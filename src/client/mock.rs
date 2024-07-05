@@ -12,7 +12,7 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
         replication_get::ReplicationGetResponse,
-        Context, Value,
+        Context, SerializedContext, Value,
     },
     error::{Error, Result},
     persistency::{
@@ -145,13 +145,12 @@ impl Client for MockClient {
         &mut self,
         key: Bytes,
         value: Bytes,
-        metadata: Option<String>,
+        context: Option<SerializedContext>,
         replication: bool,
     ) -> Result<PutResponse> {
         // only support replication for now
         assert!(replication);
-        let metadata =
-            Metadata::deserialize(0, hex::decode(metadata.unwrap()).unwrap().into()).unwrap();
+        let metadata = context.unwrap().deserialize(0).unwrap().into_metadata();
         let storage_guard = self.storage.lock().await;
 
         let existing_metadata = storage_guard.metadata_engine.get(&key).await.unwrap();

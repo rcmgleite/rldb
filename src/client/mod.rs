@@ -10,6 +10,7 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
         replication_get::ReplicationGetResponse,
+        SerializedContext,
     },
     error::Result,
 };
@@ -36,7 +37,7 @@ pub trait Client {
         &mut self,
         key: Bytes,
         value: Bytes,
-        metadata: Option<String>,
+        context: Option<SerializedContext>,
         replication: bool,
     ) -> Result<PutResponse>;
     /// Heartbeat command interface

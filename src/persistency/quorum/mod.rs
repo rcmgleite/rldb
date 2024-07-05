@@ -1,6 +1,8 @@
 //! Module that contain quorum algorithm implementations
 
 pub mod min_required_replicas;
+use std::collections::HashMap;
+
 use crate::error::Result;
 
 /// The result of a [`Quorum::finish`] call.
@@ -11,17 +13,15 @@ use crate::error::Result;
 /// Note 1: This trait allows for multiple results to meet quorum. For that reason, the [`Evaluation::Reached`] variant contains
 ///  an array of Vec<T, usize> where usize is how many times the given value was received
 /// Note 2: The API could be a bit nicer if we always returned the failures (might be useful for logging?)
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Evaluation<T> {
     /// Quorum was reached
     /// Note that this returns the value which met quorum. This means that a user of this interface
     /// is able to stop the quorum checking process and proceed without calling [`Quorum::finish`] if they want to.
     /// This is especially useful when the workflow already met quorum but other operations are still inflight
-    Reached(T),
+    Reached(Vec<T>),
     /// Quorum was not reached yet but may reached be in the future
     NotReached,
-    /// Given the current state, it's impossible to reach quorum no matter how many more operations succeed
-    Unreachable,
 }
 
 /// The result of a [`Quorum::finish`] call
@@ -31,8 +31,7 @@ pub struct QuorumResult<T, E> {
     pub evaluation: Evaluation<T>,
     /// failed items
     pub failures: Vec<E>,
-    /// total number of items that can be dealt with by this Quorum implementation
-    pub total: usize,
+    pub partial_successes: HashMap<T, usize>,
 }
 
 /// Argument passed to the [`Quorum::update`] function to mark an operation as either a Success or a Failure

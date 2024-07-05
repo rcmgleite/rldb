@@ -2,7 +2,7 @@
 //!
 //! Still not sure if these APIs are exactly what a version vector should provide..
 //! This is what I understood from the papares on VersionVector implementations
-use std::{collections::BTreeMap, mem::size_of};
+use std::{collections::BTreeMap, hash::Hash, mem::size_of};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub enum VersionVectorOrd {
 }
 
 /// The [`VersionVector`] definition
-#[derive(Default, Clone, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Default, Clone, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct VersionVector {
     id: ProcessId,
     // using a BtreeMap simply to make sure that the serialization of this structure into binary format
@@ -48,6 +48,12 @@ impl std::fmt::Debug for VersionVector {
 impl PartialEq for VersionVector {
     fn eq(&self, other: &Self) -> bool {
         self.versions == other.versions
+    }
+}
+
+impl Hash for VersionVector {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.versions.hash(state);
     }
 }
 

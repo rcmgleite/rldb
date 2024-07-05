@@ -193,7 +193,7 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
         let entry = values.remove(0);
         assert_eq!(*entry, value);
         client
-            .put(key.clone(), value.clone(), Some(resp.context), false)
+            .put(key.clone(), value.clone(), Some(resp.context.into()), false)
             .await
             .unwrap();
     }
@@ -262,7 +262,7 @@ async fn test_cluster_update_key_concurrently() {
                 .put(
                     key.clone(),
                     value.clone(),
-                    Some(get_response.context),
+                    Some(get_response.context.into()),
                     false,
                 )
                 .await
@@ -362,7 +362,7 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
                 .put(
                     key.clone(),
                     value.clone(),
-                    Some(get_response.context),
+                    Some(get_response.context.into()),
                     false,
                 )
                 .await
@@ -413,7 +413,6 @@ async fn test_cluster_nodes_write_locally_on_every_failure() {
 
 #[tokio::test]
 async fn test_cluster_stale_context_provided() {
-    tracing_subscriber::fmt::init();
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 3]).await;
 
@@ -443,7 +442,7 @@ async fn test_cluster_stale_context_provided() {
         .put(
             key.clone(),
             value_for_second_put.clone(),
-            Some(first_get_response.context.clone()),
+            Some(first_get_response.context.clone().into()),
             false,
         )
         .await
@@ -460,7 +459,7 @@ async fn test_cluster_stale_context_provided() {
         .put(
             key.clone(),
             value_for_third_put.clone(),
-            Some(first_get_response.context),
+            Some(first_get_response.context.into()),
             false,
         )
         .await
