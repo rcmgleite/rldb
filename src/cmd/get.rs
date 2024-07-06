@@ -19,7 +19,7 @@ use crate::persistency::Db;
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
-use super::{Context, Value};
+use super::types::{Context, Value};
 
 pub const GET_CMD: u32 = 2;
 

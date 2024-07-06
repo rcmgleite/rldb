@@ -10,7 +10,7 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
         replication_get::ReplicationGetResponse,
-        SerializedContext,
+        types::SerializedContext,
     },
     error::Result,
 };

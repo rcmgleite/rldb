@@ -10,8 +10,9 @@ pub mod get;
 pub mod ping;
 pub mod put;
 pub mod replication_get;
+pub mod types;
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use cluster::cluster_state::ClusterState as ClusterStateCommand;
@@ -21,7 +22,7 @@ use get::Get as GetCommand;
 use ping::Ping as PingCommand;
 use put::Put as PutCommand;
 use replication_get::ReplicationGet as ReplicationGetCommand;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tracing::{event, Level};
 
 use crate::{
@@ -33,12 +34,8 @@ use crate::{
         replication_get::REPLICATION_GET_CMD,
     },
     error::{Error, InvalidRequest, Result},
-    persistency::{
-        versioning::version_vector::{ProcessId, VersionVector},
-        Db, Metadata,
-    },
+    persistency::Db,
     server::message::{IntoMessage, Message},
-    utils::serde_utf8_bytes,
 };
 
 use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
@@ -195,86 +192,6 @@ impl Command {
     /// Serializes the given payload into json
     pub(crate) fn serialize_response_payload<T: Serialize>(payload: Result<T>) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SerializedContext(String);
-impl SerializedContext {
-    pub fn new(hex_encoded: String) -> Self {
-        Self(hex_encoded)
-    }
-
-    pub fn deserialize(self, pid: ProcessId) -> Result<Context> {
-        let hex_decoded: Bytes = hex::decode(self.0)
-            .map_err(|_| Error::InvalidRequest(InvalidRequest::MalformedContext))?
-            .into();
-
-        Ok(Context {
-            versions: VersionVector::deserialize(pid, hex_decoded)?,
-        })
-    }
-}
-
-impl From<String> for SerializedContext {
-    fn from(v: String) -> Self {
-        Self(v)
-    }
-}
-
-impl Into<String> for SerializedContext {
-    fn into(self) -> String {
-        self.0
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct Context {
-    versions: VersionVector,
-}
-
-impl Context {
-    pub fn merge_metadata(&mut self, metadata: &Metadata) {
-        self.versions.merge(&metadata.version);
-    }
-
-    pub fn serialize(self) -> SerializedContext {
-        SerializedContext(hex::encode(self.versions.serialize()))
-    }
-
-    pub fn into_metadata(self) -> Metadata {
-        Metadata {
-            version: self.versions,
-        }
-    }
-}
-
-impl From<Metadata> for Context {
-    fn from(value: Metadata) -> Self {
-        Self {
-            versions: value.version,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Value {
-    #[serde(with = "serde_utf8_bytes")]
-    value: Bytes,
-    crc32c: u32,
-}
-
-impl Value {
-    pub fn new(value: Bytes, crc32c: u32) -> Self {
-        Self { value, crc32c }
-    }
-}
-
-impl Deref for Value {
-    type Target = Bytes;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
     }
 }
 

@@ -38,7 +38,7 @@ pub struct Storage {
     pid: ProcessId,
 }
 
-///
+/// A [`StorageEntry`] represents a stored value in the database.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct StorageEntry {
     #[serde(with = "serde_utf8_bytes")]

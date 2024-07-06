@@ -20,7 +20,7 @@ pub mod versioning;
 use crate::{
     client::Factory,
     cluster::state::{Node as ClusterNode, State as ClusterState},
-    cmd::{Context, SerializedContext},
+    cmd::types::{Context, SerializedContext},
     error::{Error, Internal, InvalidRequest, Result},
 };
 
@@ -197,6 +197,7 @@ impl Db {
                 .deserialize(self.own_state.pid())?
                 .into_metadata()
                 .serialize();
+
             self.local_put(
                 key,
                 value,
@@ -486,7 +487,7 @@ mod tests {
     use crate::{
         client::mock::MockClientFactoryBuilder,
         cluster::state::{Node, State},
-        cmd::Context,
+        cmd::types::Context,
         error::{Error, InvalidRequest},
         persistency::{
             partitioning::consistent_hashing::ConsistentHashing, process_id,
