@@ -1,6 +1,9 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use rldb::client::{db_client::DbClient, Client};
+use rldb::{
+    client::{db_client::DbClient, Client},
+    persistency::storage::Value,
+};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Parser)]
@@ -73,6 +76,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Put { port, key, value } => {
             let mut client = DbClient::new(format!("127.0.0.1:{}", port));
             client.connect().await?;
+            // FIXME: The API has to receive the CRC instead of computing it...
+            let value = Value::new_unchecked(value);
             let response = client.put(key, value, None, false).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;

@@ -10,9 +10,9 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
         replication_get::ReplicationGetResponse,
-        types::SerializedContext,
     },
     error::Result,
+    persistency::storage::Value,
 };
 
 use async_trait::async_trait;
@@ -29,15 +29,28 @@ pub trait Client {
     /// Ping command interface
     async fn ping(&mut self) -> Result<PingResponse>;
     /// Get command interface
+    ///
+    /// This is the normal GET interface the users of the database should use to issue GET requests.
+    /// For information on the return type, see [`GetResponse`].
     async fn get(&mut self, key: Bytes) -> Result<GetResponse>;
     /// ReplicationGet command interface
+    ///
+    /// This API was created to be used only when nodes within the cluster need to retrieve data from other nodes.
+    /// It's possible that this will be moved to another Trait in the future.
     async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse>;
     /// Put command interface
+    ///
+    /// # Notes
+    ///  1. [`Value`] forces the client to provide a crc of the bytes being stored, which is key for durability
+    ///  2. the context argument should be filled by whatever context string is returned by GET.
+    ///   This is used internally to manage versioning/conflicts and it's not meant to be interpreted by the user/normal clients.
+    ///  3. the replication flag might be dropped in favor of 2 different puts - one for users and one for internal usage
+    ///   (similar to [`Client::get`] and [`Client::replication_get`])
     async fn put(
         &mut self,
         key: Bytes,
-        value: Bytes,
-        context: Option<SerializedContext>,
+        value: Value,
+        context: Option<String>,
         replication: bool,
     ) -> Result<PutResponse>;
     /// Heartbeat command interface

@@ -1,12 +1,6 @@
-use std::ops::Deref;
-
 use crate::{
     error::{Error, InvalidRequest, Result},
-    persistency::{
-        versioning::version_vector::{ProcessId, VersionVector},
-        Metadata,
-    },
-    utils::serde_utf8_bytes,
+    persistency::versioning::version_vector::{ProcessId, VersionVector},
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -37,7 +31,7 @@ impl SerializedContext {
             .into();
 
         Ok(Context {
-            versions: VersionVector::deserialize(pid, hex_decoded)?,
+            version: VersionVector::deserialize(pid, hex_decoded)?,
         })
     }
 }
@@ -59,60 +53,27 @@ impl Into<String> for SerializedContext {
 /// For more information, see [`SerializedContext`] docs.
 #[derive(Default, Debug)]
 pub struct Context {
-    versions: VersionVector,
+    version: VersionVector,
 }
 
 impl Context {
-    pub fn merge_metadata(&mut self, metadata: &Metadata) {
-        self.versions.merge(&metadata.version);
+    pub fn merge_version(&mut self, version: &VersionVector) {
+        self.version.merge(version);
     }
 
     pub fn serialize(self) -> SerializedContext {
-        SerializedContext(hex::encode(self.versions.serialize()))
-    }
-
-    pub fn into_metadata(self) -> Metadata {
-        Metadata {
-            version: self.versions,
-        }
+        SerializedContext(hex::encode(self.version.serialize()))
     }
 }
 
-impl From<Metadata> for Context {
-    fn from(value: Metadata) -> Self {
-        Self {
-            versions: value.version,
-        }
+impl Into<VersionVector> for Context {
+    fn into(self) -> VersionVector {
+        self.version
     }
 }
 
-/// Represents a Value associated with a key in the database.
-/// Every value contains:
-///  1. Its bytes - the actual bytes a client stored
-///  2. a checksum of these bytes
-///
-/// To make sure no corruptions happened at rest or while fullfilling the request, clients
-/// should validate the received bytes against the provided checksum.
-///
-/// # TODOs
-/// This is likely a type that should be inside the [`crate::persistency`] mod and not here...
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Value {
-    #[serde(with = "serde_utf8_bytes")]
-    value: Bytes,
-    crc32c: u32,
-}
-
-impl Value {
-    pub fn new(value: Bytes, crc32c: u32) -> Self {
-        Self { value, crc32c }
-    }
-}
-
-impl Deref for Value {
-    type Target = Bytes;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
+impl From<VersionVector> for Context {
+    fn from(version: VersionVector) -> Self {
+        Self { version }
     }
 }

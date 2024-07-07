@@ -1,5 +1,6 @@
 //! Module that contains all commands implemented by rldb.
 //!
+//! # Design principals
 //! Commands have 2 responsibilities:
 //!  1. Parse request params (basically serde_json calls)
 //!  2. Construct responses that are sent back to callers
@@ -201,6 +202,7 @@ mod tests {
     use crate::cmd::get::Get;
     use crate::cmd::put::Put;
     use crate::error::{Error, InvalidRequest};
+    use crate::persistency::storage::Value;
     use crate::server::message::Message;
     use bytes::Bytes;
 
@@ -223,7 +225,7 @@ mod tests {
     fn invalid_request_unrecognized_command() {
         let put_cmd = Put::new(
             Bytes::from("foo"),
-            Bytes::from("bar"),
+            Value::new_unchecked(Bytes::from("bar")),
             None,
             "requestId".to_string(),
         );
@@ -245,7 +247,7 @@ mod tests {
     fn invalid_request_empty_payload() {
         let put_cmd = Put::new(
             Bytes::from("foo"),
-            Bytes::from("bar"),
+            Value::new_unchecked(Bytes::from("bar")),
             None,
             "requestId".to_string(),
         );

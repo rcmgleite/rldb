@@ -5,6 +5,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::persistency::storage::Value;
 use crate::persistency::Db;
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
@@ -18,29 +19,23 @@ pub const PUT_CMD: u32 = 3;
 pub struct Put {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
-    #[serde(with = "serde_utf8_bytes")]
-    value: Bytes,
+    value: Value,
     replication: bool,
-    context: Option<SerializedContext>,
+    context: Option<String>,
     request_id: String,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
-    pub fn new(
-        key: Bytes,
-        value: Bytes,
-        context: Option<SerializedContext>,
-        request_id: String,
-    ) -> Self {
+    pub fn new(key: Bytes, value: Value, context: Option<String>, request_id: String) -> Self {
         Self::new_private(key, value, context, false, request_id)
     }
 
     /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
     pub fn new_replication(
         key: Bytes,
-        value: Bytes,
-        context: Option<SerializedContext>,
+        value: Value,
+        context: Option<String>,
         request_id: String,
     ) -> Self {
         Self::new_private(key, value, context, true, request_id)
@@ -48,8 +43,8 @@ impl Put {
 
     fn new_private(
         key: Bytes,
-        value: Bytes,
-        context: Option<SerializedContext>,
+        value: Value,
+        context: Option<String>,
         replication: bool,
         request_id: String,
     ) -> Self {
@@ -64,8 +59,13 @@ impl Put {
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
-        db.put(self.key, self.value, self.replication, self.context)
-            .await?;
+        db.put(
+            self.key,
+            self.value,
+            self.replication,
+            self.context.map(SerializedContext::from),
+        )
+        .await?;
         Ok(PutResponse {
             message: "Ok".to_string(),
         })

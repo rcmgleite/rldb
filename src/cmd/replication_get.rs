@@ -1,4 +1,17 @@
 //! ReplicationGet [`crate::cmd::Command`]
+//!
+//! This command is to be used internally by the Coordinator node during a GET.
+//! The difference between [`crate::cmd::get::Get`] and [`crate::cmd::replication_get::ReplicationGet`]
+//! is 2 fold:
+//!  1. A replication GET instructs the [`crate::persistency::storage`] layer to simply return whatever value it has locally
+//!   (as opposed to having to perform a quorum read on multiple nodes)
+//!  2. The response of a ReplicationGet includes 1..n [`crate::persistency::versioning::version_vector::VersionVector`]
+//!  instead of a [`crate::cmd::types::Context`] object. This is because the coordinator node needs to know
+//!  all existing versions of a key to be able to handle the request, as opposed to a client that only needs
+//!  the merged version vector instance to be able to resolve conflicts if they exist.
+//!
+//! # TODOs
+//!  1. It might be important in the future to make this method protected somehow - ie: make sure regular clients can't call it.
 use std::hash::Hash;
 use std::sync::Arc;
 

@@ -1,17 +1,17 @@
 use crate::{
+    cmd::types::SerializedContext,
     error::{Error, InvalidRequest, Result},
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
     utils::serde_utf8_bytes,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use crc32c::crc32c;
+use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use std::{mem::size_of, sync::Arc};
 use tracing::{event, Level};
 
-use super::{
-    versioning::version_vector::{ProcessId, VersionVectorOrd},
-    Metadata, MetadataEvaluation,
-};
+use super::versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
 
 /// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
 pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
@@ -38,16 +38,71 @@ pub struct Storage {
     pid: ProcessId,
 }
 
-/// A [`StorageEntry`] represents a stored value in the database.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct StorageEntry {
+/// Represents a Value associated with a key in the database.
+/// Every value contains:
+///  1. Its bytes - the actual bytes a client stored
+///  2. a checksum of these bytes
+///
+/// To make sure no corruptions happened at rest or while fullfilling the request, clients
+/// should validate the received bytes against the provided checksum.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct Value {
     #[serde(with = "serde_utf8_bytes")]
-    pub value: Bytes,
-    pub metadata: Metadata,
+    value: Bytes,
+    crc32c: u32,
 }
 
-pub(crate) fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<MetadataEvaluation> {
-    match lhs.version.causality(&rhs.version) {
+impl Value {
+    pub fn new(value: Bytes, crc32c: u32) -> Self {
+        Self { value, crc32c }
+    }
+
+    /// TODO: At some point this function has to be deleted as using it
+    /// is unsafe checksum-wise
+    pub fn new_unchecked(value: Bytes) -> Self {
+        let crc = crc32c(&value);
+
+        Self { value, crc32c: crc }
+    }
+
+    pub fn as_value(&self) -> Bytes {
+        self.value.clone()
+    }
+
+    pub fn random() -> Self {
+        let value: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect();
+        let value: Bytes = value.into();
+        Self::new_unchecked(value)
+    }
+}
+
+/// A [`StorageEntry`] represents a stored value in the database.
+///
+/// Currently we only store the [`Value`] and its version (represented by [`VersionVector`]).
+/// It's unclear if we will need other type of Metadata in the future so won't bother to
+/// add it before we need it.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub struct StorageEntry {
+    pub value: Value,
+    pub version: VersionVector,
+}
+
+/// This enum represents the result of [`version_evaluation`]. It tells the caller
+/// if the lhs version should override the rhs one or if they conflict.
+pub(crate) enum VersionEvaluation {
+    Override,
+    Conflict,
+}
+
+pub(crate) fn version_evaluation(
+    lhs: &VersionVector,
+    rhs: &VersionVector,
+) -> Result<VersionEvaluation> {
+    match lhs.causality(&rhs) {
         VersionVectorOrd::HappenedBefore | VersionVectorOrd::Equals => {
             // the data we are trying to store is actually older than what's already stored.
             // This can happen due to read repair and active anti-entropy processes for instance.
@@ -58,12 +113,12 @@ pub(crate) fn metadata_evaluation(lhs: &Metadata, rhs: &Metadata) -> Result<Meta
         }
         VersionVectorOrd::HappenedAfter => {
             // This means we are ok to override both data and metadata
-            Ok(MetadataEvaluation::Override)
+            Ok(VersionEvaluation::Override)
         }
         VersionVectorOrd::HappenedConcurrently => {
             // now we have the problem of concurrent writes. Our current approach is to actually
             // store both versions so that the client can deal with the conflict resolution
-            Ok(MetadataEvaluation::Conflict)
+            Ok(VersionEvaluation::Conflict)
         }
     }
 }
@@ -77,7 +132,12 @@ impl Storage {
         }
     }
 
-    pub async fn put(&self, key: Bytes, entry: StorageEntry) -> Result<Vec<StorageEntry>> {
+    pub async fn put(
+        &self,
+        key: Bytes,
+        value: Value,
+        context: SerializedContext,
+    ) -> Result<Vec<StorageEntry>> {
         let current_versions = match self.get(key.clone()).await {
             Ok(current_versions) => current_versions,
             Err(Error::NotFound { .. }) => Vec::new(),
@@ -92,20 +152,28 @@ impl Storage {
             current_versions
         );
 
-        let mut entries_to_store = Vec::new();
+        let new_version = context.deserialize(self.pid)?;
 
-        entries_to_store.push(StorageEntry {
-            metadata: entry.metadata.clone(),
-            value: entry.value,
-        });
+        let mut entries_to_store = Vec::new();
+        let new_entry = StorageEntry {
+            value: value.clone(),
+            version: new_version.into(),
+        };
+
+        // entries_to_store.push(StorageEntry {
+        //     value,
+        //     version: entry.version.clone(),
+        // });
 
         for existing_entry in current_versions {
-            if let super::MetadataEvaluation::Conflict =
-                metadata_evaluation(&entry.metadata, &existing_entry.metadata)?
+            if let VersionEvaluation::Conflict =
+                version_evaluation(&new_entry.version, &existing_entry.version)?
             {
                 entries_to_store.push(existing_entry);
             }
         }
+
+        entries_to_store.push(new_entry);
 
         event!(
             Level::INFO,
@@ -118,23 +186,24 @@ impl Storage {
 
     async fn do_put(&self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
         let mut data_buf = BytesMut::new();
-        let mut metadata_buf = BytesMut::new();
+        let mut version_buf = BytesMut::new();
         data_buf.put_u32(items.len() as u32);
-        metadata_buf.put_u32(items.len() as u32);
+        version_buf.put_u32(items.len() as u32);
 
         for item in items.iter() {
-            data_buf.put_u32(item.value.len() as u32);
-            data_buf.put_slice(&item.value[..]);
+            let value = item.value.as_value();
+            data_buf.put_u32(value.len() as u32);
+            data_buf.put_slice(&value[..]);
 
-            let serialized_metadata = item.metadata.serialize();
-            metadata_buf.put_u32(serialized_metadata.len() as u32);
-            metadata_buf.put_slice(&serialized_metadata[..]);
+            let serialized_version = item.version.serialize();
+            version_buf.put_u32(serialized_version.len() as u32);
+            version_buf.put_slice(&serialized_version[..]);
         }
 
         // since the metadata is what tells us that data exists, let's store it second, only if the data was stored
         // successfully
         self.data_engine.put(key.clone(), data_buf.freeze()).await?;
-        self.metadata_engine.put(key, metadata_buf.freeze()).await?;
+        self.metadata_engine.put(key, version_buf.freeze()).await?;
 
         Ok(items)
     }
@@ -170,7 +239,7 @@ impl Storage {
     }
 
     pub async fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
-        let metadata = self
+        let version = self
             .metadata_engine
             .get(&key)
             .await?
@@ -179,7 +248,7 @@ impl Storage {
             reason: "Metadata entry found but no data entry found".to_string(),
         })?;
 
-        let metadata_items = Self::unmarshall_entries(metadata)?;
+        let metadata_items = Self::unmarshall_entries(version)?;
         let data_items = Self::unmarshall_entries(data)?;
 
         if metadata_items.len() != data_items.len() {
@@ -190,8 +259,8 @@ impl Storage {
 
         let data_and_metadata_items: Vec<StorageEntry> = std::iter::zip(metadata_items, data_items)
             .map(|(m, d)| StorageEntry {
-                value: d,
-                metadata: Metadata::deserialize(self.pid, m).unwrap(), // TODO: unwrap()
+                value: Value::new_unchecked(d), // TODO: the crc should be stored, not computed on the fly
+                version: VersionVector::deserialize(self.pid, m).unwrap(), // TODO: unwrap()
             })
             .collect();
 
@@ -203,7 +272,8 @@ impl Storage {
 mod tests {
     use super::Storage;
     use crate::{
-        persistency::{storage::StorageEntry, versioning::version_vector::VersionVector, Metadata},
+        cmd::types::Context,
+        persistency::{storage::Value, versioning::version_vector::VersionVector},
         storage_engine::in_memory::InMemory,
     };
     use bytes::Bytes;
@@ -215,42 +285,43 @@ mod tests {
         let store = Storage::new(Arc::new(InMemory::default()), 0);
 
         let key = Bytes::from("key");
-        let value_pid_0 = Bytes::from("value 0");
+        let value_pid_0 = Value::new_unchecked(Bytes::from("value 0"));
 
-        let mut metadata_pid_0 = Metadata {
-            version: VersionVector::new(0),
-        };
+        let mut version_pid_0 = VersionVector::new(0);
 
-        metadata_pid_0.version.increment();
+        version_pid_0.increment();
 
-        let entry_pid_0 = StorageEntry {
-            value: value_pid_0.clone(),
-            metadata: metadata_pid_0.clone(),
-        };
+        store
+            .put(
+                key.clone(),
+                value_pid_0.clone(),
+                Context::from(version_pid_0.clone()).serialize(),
+            )
+            .await
+            .unwrap();
 
-        store.put(key.clone(), entry_pid_0).await.unwrap();
+        let mut version_pid_1 = VersionVector::new(1);
 
-        let mut metadata_pid_1 = Metadata {
-            version: VersionVector::new(1),
-        };
+        version_pid_1.increment();
 
-        metadata_pid_1.version.increment();
+        let value_pid_1 = Value::new_unchecked(Bytes::from("value 1"));
 
-        let value_pid_1 = Bytes::from("value 1");
-        let entry_pid_1 = StorageEntry {
-            value: value_pid_1.clone(),
-            metadata: metadata_pid_1.clone(),
-        };
-
-        store.put(key.clone(), entry_pid_1).await.unwrap();
+        store
+            .put(
+                key.clone(),
+                value_pid_1.clone(),
+                Context::from(version_pid_1.clone()).serialize(),
+            )
+            .await
+            .unwrap();
 
         let get_entries = store.get(key).await.unwrap();
 
         assert_eq!(get_entries.len(), 2);
         for entry in get_entries {
-            if entry.metadata == metadata_pid_0 {
+            if entry.version == version_pid_0 {
                 assert_eq!(entry.value, value_pid_0);
-            } else if entry.metadata == metadata_pid_1 {
+            } else if entry.version == version_pid_1 {
                 assert_eq!(entry.value, value_pid_1);
             } else {
                 panic!("should never happen");

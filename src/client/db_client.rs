@@ -13,7 +13,7 @@ use crate::cmd::cluster::join_cluster::JoinClusterResponse;
 use crate::cmd::get::GetResponse;
 use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
-use crate::cmd::types::SerializedContext;
+use crate::persistency::storage::Value;
 use crate::server::message::Message;
 use crate::{cluster::state::Node, cmd::replication_get::ReplicationGetResponse};
 
@@ -105,14 +105,14 @@ impl Client for DbClient {
     async fn put(
         &mut self,
         key: Bytes,
-        value: Bytes,
-        metadata: Option<SerializedContext>,
+        value: Value,
+        context: Option<String>,
         replication: bool,
     ) -> Result<PutResponse> {
         let put_cmd = if replication {
-            cmd::put::Put::new_replication(key, value, metadata, generate_request_id())
+            cmd::put::Put::new_replication(key, value, context, generate_request_id())
         } else {
-            cmd::put::Put::new(key, value, metadata, generate_request_id())
+            cmd::put::Put::new(key, value, context, generate_request_id())
         };
         let req = Message::from(put_cmd).serialize();
 

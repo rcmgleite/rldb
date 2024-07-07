@@ -1,13 +1,12 @@
 //! Module that contains the abstraction connecting the [`StorageEngine`] and [`ClusterState`] into a single interface.
 //!
 //! This interface is what a [`crate::cmd::Command`] has access to in order to execute its functionality.
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use storage::{Storage, StorageEngine, StorageEntry};
+use storage::{Storage, StorageEngine, StorageEntry, Value};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{event, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
@@ -98,40 +97,6 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
     murmur3_hash(addr)
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct Metadata {
-    // version vector of this object
-    pub version: VersionVector,
-}
-
-pub(crate) enum MetadataEvaluation {
-    Override,
-    Conflict,
-}
-
-impl Metadata {
-    /// Serializes [`Metadata`] into [`Bytes`]
-    ///
-    /// FIXME: This impl is really inefficient due to the amount of memory copies.
-    /// The operating of adding "framing"/metadata to [`Bytes`] is something that we do a lot...
-    /// we might need a better abstratction/data structure to deal with the properly
-    pub fn serialize(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_u32(self.version.serialized_size() as u32);
-        buf.put_slice(&self.version.serialize());
-
-        buf.freeze()
-    }
-
-    pub fn deserialize(self_pid: u128, mut serialized: Bytes) -> Result<Metadata> {
-        let serialized_size = serialized.get_u32() as usize;
-        serialized.truncate(serialized_size);
-        Ok(Metadata {
-            version: VersionVector::deserialize(self_pid, serialized)?,
-        })
-    }
-}
-
 impl Db {
     /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
     pub fn new(
@@ -172,7 +137,7 @@ impl Db {
     pub async fn put(
         &self,
         key: Bytes,
-        value: Bytes,
+        value: Value,
         replication: bool,
         context: Option<SerializedContext>,
     ) -> Result<()> {
@@ -192,18 +157,8 @@ impl Db {
                 InvalidRequest::ReplicationPutMustIncludeContext,
             ))?;
 
-            // if this is a replication PUT, we don't have to deal with quorum
-            let metadata = context
-                .deserialize(self.own_state.pid())?
-                .into_metadata()
-                .serialize();
-
-            self.local_put(
-                key,
-                value,
-                Metadata::deserialize(self.own_state.pid(), metadata)?,
-            )
-            .await?;
+            // if this is a replication PUT, we don't have to deal with quorum. Just store it locally and be done.
+            self.local_put(key, value, context).await?;
         } else if !preference_list.contains(&self.cluster_state.own_addr()) {
             let dst_node = preference_list[0].clone();
             event!(
@@ -226,18 +181,21 @@ impl Db {
                 })?)
                 .await?;
 
-            let _ = client.put(key.clone(), value, context, false).await?;
+            let _ = client
+                .put(key.clone(), value, context.map(Into::into), false)
+                .await?;
         } else {
             event!(Level::DEBUG, "Executing a coordinator Put");
-            let mut metadata = if let Some(context) = context {
-                context.deserialize(self.own_state.pid())?.into_metadata()
+            let mut version = if let Some(context) = context {
+                context.deserialize(self.own_state.pid())?.into()
             } else {
-                Metadata {
-                    version: VersionVector::new(self.own_state.pid()),
-                }
+                VersionVector::new(self.own_state.pid())
             };
 
-            metadata.version.increment();
+            version.increment();
+            let mut updated_context = Context::default();
+            updated_context.merge_version(&version);
+            let updated_context = updated_context.serialize();
 
             // if this is not a replication PUT, we have to honor quorum before returning a success
             // if we have a quorum config, we have to make sure we wrote to enough replicas
@@ -250,7 +208,7 @@ impl Db {
             let preference_list = self.preference_list(&key)?;
             event!(Level::DEBUG, "preference_list: {:?}", preference_list);
             for node in preference_list {
-                futures.push(self.do_put(key.clone(), value.clone(), metadata.clone(), node))
+                futures.push(self.do_put(key.clone(), value.clone(), updated_context.clone(), node))
             }
 
             // for now, let's wait til all futures either succeed or fail.
@@ -292,11 +250,9 @@ impl Db {
         Ok(())
     }
 
-    async fn local_put(&self, key: Bytes, value: Bytes, metadata: Metadata) -> Result<()> {
+    async fn local_put(&self, key: Bytes, value: Value, context: SerializedContext) -> Result<()> {
         let storage_guard = self.storage.lock().await;
-        storage_guard
-            .put(key, StorageEntry { value, metadata })
-            .await?;
+        storage_guard.put(key, value, context).await?;
 
         // FIXME: return type
         Ok(())
@@ -306,13 +262,13 @@ impl Db {
     async fn do_put(
         &self,
         key: Bytes,
-        value: Bytes,
-        metadata: Metadata,
+        value: Value,
+        context: SerializedContext,
         dst_addr: Bytes,
     ) -> Result<()> {
         if self.owns_key(&dst_addr)? {
             event!(Level::DEBUG, "Storing key : {:?} locally", key);
-            self.local_put(key, value, metadata).await?;
+            self.local_put(key, value, context).await?;
         } else {
             event!(
                 Level::DEBUG,
@@ -336,12 +292,7 @@ impl Db {
 
             // TODO: assert the response
             let _ = client
-                .put(
-                    key.clone(),
-                    value,
-                    Some(Context::from(metadata).serialize()),
-                    true,
-                )
+                .put(key.clone(), value, Some(context.into()), true)
                 .await?;
         }
 
@@ -490,8 +441,8 @@ mod tests {
         cmd::types::Context,
         error::{Error, InvalidRequest},
         persistency::{
-            partitioning::consistent_hashing::ConsistentHashing, process_id,
-            versioning::version_vector::VersionVectorOrd, Db, Metadata, VersionVector,
+            partitioning::consistent_hashing::ConsistentHashing, process_id, storage::Value,
+            versioning::version_vector::VersionVectorOrd, Db, VersionVector,
         },
         server::config::Quorum,
         storage_engine::in_memory::InMemory,
@@ -540,10 +491,11 @@ mod tests {
     async fn test_db_put_get_simple() {
         let (local_addr, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
+
         let replication = false;
-        let metadata = None;
-        db.put(key.clone(), value.clone(), replication, metadata)
+        let context = None;
+        db.put(key.clone(), value.clone(), replication, context)
             .await
             .unwrap();
 
@@ -554,24 +506,22 @@ mod tests {
         assert_eq!(entry.value, value);
 
         let self_pid = process_id(&local_addr);
-        let deserialized_metadata = entry.metadata;
-        let mut expected_metadata = Metadata {
-            version: VersionVector::new(self_pid),
-        };
-        expected_metadata.version.increment();
+        let deserialized_version = entry.version;
+        let mut expected_version = VersionVector::new(self_pid);
+        expected_version.increment();
 
-        assert_eq!(deserialized_metadata, expected_metadata);
+        assert_eq!(deserialized_version, expected_version);
     }
 
     #[tokio::test]
-    async fn test_db_replication_put_no_metadata() {
+    async fn test_db_replication_put_no_context() {
         let (_, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = true;
-        let metadata = None;
+        let context = None;
         let err = db
-            .put(key.clone(), value.clone(), replication, metadata)
+            .put(key.clone(), value.clone(), replication, context)
             .await
             .err()
             .unwrap();
@@ -585,21 +535,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_db_put_with_existing_metadata() {
-        let (local_addr, db) = initialize_state();
+    async fn test_db_put_with_existing_version() {
+        let (addr, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = false;
-        let mut initial_metadata = Metadata {
-            version: VersionVector::new(1), // any random number would do
-        };
-        initial_metadata.version.increment();
+        let pid = process_id(&addr);
+        let mut initial_version = VersionVector::new(pid);
+
+        initial_version.increment();
 
         db.put(
             key.clone(),
             value.clone(),
             replication,
-            Some(Context::from(initial_metadata.clone()).serialize()),
+            Some(Context::from(initial_version.clone()).serialize()),
         )
         .await
         .unwrap();
@@ -609,15 +559,12 @@ mod tests {
         let entry = get_result.remove(0);
         assert_eq!(entry.value, value);
 
-        let self_pid = process_id(&local_addr);
-        let deserialized_metadata = entry.metadata;
+        let deserialized_version = entry.version;
+        let mut expected_version = initial_version;
 
-        let mut expected_metadata =
-            Metadata::deserialize(self_pid, initial_metadata.serialize()).unwrap();
+        expected_version.increment();
 
-        expected_metadata.version.increment();
-
-        assert_eq!(deserialized_metadata, expected_metadata);
+        assert_eq!(deserialized_version, expected_version);
     }
 
     #[tokio::test]
@@ -643,7 +590,7 @@ mod tests {
             Box::new(MockClientFactoryBuilder::new().build()),
         ));
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = false;
         let metadata = None;
         let err = db
@@ -663,10 +610,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_db_put_new_metadata_descends_from_original_metadata() {
+    async fn test_db_put_new_metadata_descends_from_original_version() {
         let (_, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = false;
 
         // This put without metadata will generate the first metadata
@@ -681,7 +628,7 @@ mod tests {
         let first_entry = entries.remove(0);
         assert_eq!(first_entry.value, value);
 
-        let new_value = Bytes::from("a new value");
+        let new_value = Value::random();
         // Note that we are piping the metadata received on GET to the PUT request.
         // This is what guarantees that the new_value will override the previous value
         db.put(
@@ -689,21 +636,19 @@ mod tests {
             new_value.clone(),
             replication,
             // Some(first_entry.metadata.serialize()),
-            Some(Context::from(first_entry.metadata.clone()).serialize()),
+            Some(Context::from(first_entry.version.clone()).serialize()),
         )
         .await
         .unwrap();
 
         let mut second_read_entries = db.get(key, replication).await.unwrap();
         assert_eq!(second_read_entries.len(), 1);
-        let deserialized_first_metadata = first_entry.metadata;
+        let deserialized_first_version = first_entry.version;
         let second_entry = second_read_entries.remove(0);
-        let deserialized_second_metadata = second_entry.metadata;
+        let deserialized_second_version = second_entry.version;
 
         assert_eq!(
-            deserialized_second_metadata
-                .version
-                .causality(&deserialized_first_metadata.version),
+            deserialized_second_version.causality(&deserialized_first_version),
             VersionVectorOrd::HappenedAfter
         );
     }
@@ -712,7 +657,7 @@ mod tests {
     async fn test_db_put_stale_version_with_empty_metadata() {
         let (_, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = false;
 
         // This put without metadata will generate the first metadata
@@ -726,7 +671,7 @@ mod tests {
         let first_entry = first_entries.remove(0);
         assert_eq!(first_entry.value, value);
 
-        let new_value = Bytes::from("a new value");
+        let new_value = Value::random();
         // Now we do another put to the same key and again we don't pass any metadata.
         // this means that this put should fail since it's trying to put a stale value
         let err = db
@@ -742,23 +687,21 @@ mod tests {
     async fn test_db_put_stale_version() {
         let (local_addr, db) = initialize_state();
         let key = Bytes::from("a key");
-        let value = Bytes::from("a value");
+        let value = Value::random();
         let replication = false;
 
         let self_pid = process_id(&local_addr);
-        let mut first_metadata = Metadata {
-            version: VersionVector::new(self_pid),
-        };
+        let mut first_version = VersionVector::new(self_pid);
 
-        first_metadata.version.increment();
-        first_metadata.version.increment();
+        first_version.increment();
+        first_version.increment();
 
         // This put without metadata will generate the first metadata
         db.put(
             key.clone(),
             value.clone(),
             replication,
-            Some(Context::from(first_metadata.clone()).serialize()),
+            Some(Context::from(first_version.clone()).serialize()),
         )
         .await
         .unwrap();
@@ -769,7 +712,7 @@ mod tests {
         let first_entry = first_entries.remove(0);
         assert_eq!(first_entry.value, value);
 
-        let new_value = Bytes::from("a new value");
+        let new_value = Value::random();
         // Now we do another put to the same key and again we don't pass any metadata.
         // this means that this put should fail since it's trying to put a stale value
         let err = db
@@ -777,7 +720,7 @@ mod tests {
                 key.clone(),
                 new_value.clone(),
                 replication,
-                Some(Context::from(first_metadata).serialize()),
+                Some(Context::from(first_version).serialize()),
             )
             .await
             .err()

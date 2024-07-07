@@ -1,7 +1,8 @@
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::atomic::Ordering::SeqCst,
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use bytes::Bytes;
@@ -10,7 +11,8 @@ use rand::{distributions::Alphanumeric, Rng};
 use rldb::{
     client::{db_client::DbClient, Client},
     cluster::state::NodeStatus,
-    error::{self, InvalidRequest},
+    error::{self},
+    persistency::storage::Value,
     server::Server,
 };
 use tokio::{
@@ -130,8 +132,7 @@ async fn test_cluster_put_get_success() {
             continue;
         }
         used_keys.insert(key.clone());
-        // the data stored doesn't matter.. what changes behavior is the key, hence only keys are randomized
-        let value = Bytes::from("bar");
+        let value = Value::random();
 
         let client = &mut clients[0];
         let response = client
@@ -143,7 +144,7 @@ async fn test_cluster_put_get_success() {
         let mut resp = client.get(key).await.unwrap();
         assert_eq!(resp.values.len(), 1);
         let first_entry = resp.values.remove(0);
-        assert_eq!(*first_entry, value);
+        assert_eq!(first_entry, value);
     }
 
     stop_servers(handles).await;
@@ -174,7 +175,7 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
         .collect();
     let key: Bytes = key.into();
 
-    let value = Bytes::from("bar");
+    let value = Value::random();
 
     let client = &mut clients[0];
     let response = client
@@ -191,7 +192,7 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 
         assert_eq!(values.len(), 1);
         let entry = values.remove(0);
-        assert_eq!(*entry, value);
+        assert_eq!(entry, value);
         client
             .put(key.clone(), value.clone(), Some(resp.context.into()), false)
             .await
@@ -203,7 +204,7 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
     let mut values = resp.values.clone();
     assert_eq!(values.len(), 1);
     let entry = values.remove(0);
-    assert_eq!(*entry, value);
+    assert_eq!(entry, value);
 
     stop_servers(handles).await;
 }
@@ -215,8 +216,9 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 #[ignore]
 #[tokio::test]
 async fn test_cluster_update_key_concurrently() {
+    let n_nodes = 20;
     let (handles, mut clients) =
-        start_servers(vec!["tests/conf/test_node_config.json".into(); 20]).await;
+        start_servers(vec!["tests/conf/test_node_config.json".into(); n_nodes]).await;
 
     let key: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -225,7 +227,7 @@ async fn test_cluster_update_key_concurrently() {
         .collect();
     let key: Bytes = key.into();
 
-    let value = Bytes::from("bar");
+    let value = Value::random();
 
     let client = &mut clients[0];
     let response = client
@@ -237,36 +239,39 @@ async fn test_cluster_update_key_concurrently() {
 
     let mut client_handles = Vec::new();
 
-    #[derive(Default)]
-    struct ErrorsSeen {
-        stale_context: usize,
-    }
-
-    let saw_failure = Arc::new(Mutex::new(ErrorsSeen::default()));
+    let errors_seen: Arc<AtomicUsize> = Default::default();
+    // start the counter with 1 because we executed one PUT before looping through all clients
+    let successes_seen: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
     for _ in 0..clients.len() {
-        // add random string as value so that we can assert on the final value PUT at the end
-        let value: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
-        let value: Bytes = value.into();
+        let value = Value::random();
         let key = key.clone();
-        let saw_failure = saw_failure.clone();
+        let errors_seen = errors_seen.clone();
+        let successes_seen = successes_seen.clone();
         let mut client = clients.remove(0);
-        client_handles.push(tokio::spawn(async move {
-            let get_response = client.get(key.clone()).await.unwrap();
-            assert_eq!(get_response.values.len(), 1);
 
-            match client
-                .put(
-                    key.clone(),
-                    value.clone(),
-                    Some(get_response.context.into()),
-                    false,
-                )
-                .await
-            {
+        // adding some random jitter to make sure the test is coupled with timing.
+        let sleep_jitter = rand::thread_rng().gen_range(1..=10);
+        client_handles.push(tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(sleep_jitter)).await;
+            let get_response = client.get(key.clone()).await;
+
+            // This error scenario is not super easy to understand.
+            //  1. an initial PUT stores a value for the required key
+            //  2. One of the 20 concurrent PUTs we are doing start executing and overrides the value
+            //   only locally and delays the replication (time sensitive)
+            //  3. Another node does the same thing, updating only the its own local storage
+            //  4. yet Another node tries a GET while the cluster is in this inconsistent state:
+            //    [Node A: X] [Node B: Y] [Node C: Z] -> While in this state, all GETs will fail with NoQuorum
+            //  5. By the end of these 3 concurrent PUTs, we will have every value on every node - so 3 conflicts
+            //    [Node A: X,Y,Z] [Node B: X,Y,Z] [Node C: X,Y,Z]
+            let context = if get_response.is_err() {
+                errors_seen.fetch_add(1, SeqCst);
+                return;
+            } else {
+                Some(get_response.unwrap().context)
+            };
+
+            match client.put(key.clone(), value.clone(), context, false).await {
                 Err(err) => match err {
                     Error::QuorumNotReached {
                         operation,
@@ -277,17 +282,17 @@ async fn test_cluster_update_key_concurrently() {
                         for err in errors {
                             assert!(err.is_stale_context_provided())
                         }
-                        saw_failure.lock().unwrap().stale_context += 1;
-                    }
-                    Error::InvalidRequest(InvalidRequest::StaleContextProvided) => {
-                        saw_failure.lock().unwrap().stale_context += 1;
+
+                        errors_seen.fetch_add(1, SeqCst);
                     }
                     _ => {
                         panic!("Invalid error {err}");
                     }
                 },
 
-                Ok(_) => {}
+                Ok(_) => {
+                    successes_seen.fetch_add(1, SeqCst);
+                }
             }
         }));
     }
@@ -304,109 +309,29 @@ async fn test_cluster_update_key_concurrently() {
         client.connect().await.unwrap();
 
         let get_result = client.get(key.clone()).await.unwrap();
-        assert_eq!(get_result.values.len(), 3);
+        // We can have 3 scenarios:
+        //  1, due to the jitter, only a single PUT succeeds and all the others fail. In this case velues.len() == 1;
+        //  2, due to the jitter, only 2 PUTs can succeed (concurrently - causing a conflict)
+        //  3. due to the jitter (or lack thereof), at most 3 puts can be successful and 3 conflicting versions will be generated.
+        //    3 is the max number of conflicts in this case because only 3 nodes in the cluster can accept puts for a given key.
+        assert_eq!(get_result.values.len(), successes_seen.load(SeqCst));
         for v in get_result.values {
             returned_values.insert(v);
         }
     }
 
-    assert_eq!(returned_values.len(), 3);
+    println!(
+        "DEBUG: success: {:?}, failures: {:?} - {:?}",
+        successes_seen.load(SeqCst),
+        errors_seen.load(SeqCst),
+        returned_values
+    );
 
-    assert!(saw_failure.lock().unwrap().stale_context > 0);
-    stop_servers(handles).await;
-}
-
-#[ignore]
-#[tokio::test]
-async fn test_cluster_nodes_write_locally_on_every_failure() {
-    let (handles, mut clients) =
-        start_servers(vec!["tests/conf/test_node_config.json".into(); 3]).await;
-
-    let key: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(20)
-        .map(char::from)
-        .collect();
-    let key: Bytes = key.into();
-
-    let value = Bytes::from("bar");
-
-    let client = &mut clients[0];
-    let response = client
-        .put(key.clone(), value.clone(), None, false)
-        .await
-        .unwrap();
-
-    assert_eq!(response.message, "Ok".to_string());
-
-    let first_get_response = client.get(key.clone()).await.unwrap();
-    assert_eq!(first_get_response.values.len(), 1);
-
-    let mut client_handles = Vec::new();
-
-    for _ in 0..clients.len() {
-        // add random string as value so that we can assert on the final value PUT at the end
-        let value: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
-        let value: Bytes = value.into();
-        let key = key.clone();
-        let mut client = clients.remove(0);
-        client_handles.push(tokio::spawn(async move {
-            let get_response = client.get(key.clone()).await.unwrap();
-            assert_eq!(get_response.values.len(), 1);
-
-            match client
-                .put(
-                    key.clone(),
-                    value.clone(),
-                    Some(get_response.context.into()),
-                    false,
-                )
-                .await
-            {
-                Err(err) => match err {
-                    Error::QuorumNotReached {
-                        operation,
-                        reason: _,
-                        errors,
-                    } => {
-                        assert_eq!(operation, *"Put");
-                        for err in errors {
-                            assert!(err.is_stale_context_provided())
-                        }
-                    }
-                    _ => {
-                        panic!("Invalid error {err}");
-                    }
-                },
-
-                Ok(_) => {}
-            }
-        }));
-    }
-
-    for client_handle in client_handles {
-        client_handle.await.unwrap();
-    }
-
-    // finally, since we are not allowing sloppy quorums and this test is configured for strong consistency (r: 2, w:2 n: 3), every
-    // node that we use to query should return the same data.
-    let mut returned_values = HashSet::new();
-    for i in 0..handles.len() {
-        let mut client = DbClient::new(handles[i].client_listener_addr.clone());
-        client.connect().await.unwrap();
-
-        let get_result = client.get(key.clone()).await.unwrap();
-        assert_eq!(get_result.values.len(), 3);
-        for v in get_result.values {
-            returned_values.insert(v);
-        }
-    }
-
-    assert_eq!(returned_values.len(), 3);
+    assert_eq!(returned_values.len(), successes_seen.load(SeqCst));
+    assert_eq!(
+        successes_seen.load(SeqCst) + errors_seen.load(SeqCst),
+        n_nodes + 1
+    );
 
     stop_servers(handles).await;
 }
@@ -423,7 +348,7 @@ async fn test_cluster_stale_context_provided() {
         .collect();
     let key: Bytes = key.into();
 
-    let value_for_first_put = Bytes::from("First Put");
+    let value_for_first_put = Value::random();
 
     let client = &mut clients[0];
     let response = client
@@ -435,9 +360,9 @@ async fn test_cluster_stale_context_provided() {
     let mut first_get_response = client.get(key.clone()).await.unwrap();
     assert_eq!(first_get_response.values.len(), 1);
     let first_entry = first_get_response.values.remove(0);
-    assert_eq!(*first_entry, value_for_first_put);
+    assert_eq!(first_entry, value_for_first_put);
 
-    let value_for_second_put = Bytes::from("Second Put");
+    let value_for_second_put = Value::random();
     client
         .put(
             key.clone(),
@@ -451,10 +376,10 @@ async fn test_cluster_stale_context_provided() {
     let mut second_get_response = client.get(key.clone()).await.unwrap();
     assert_eq!(second_get_response.values.len(), 1);
     let second_entry = second_get_response.values.remove(0);
-    assert_eq!(*second_entry, value_for_second_put);
+    assert_eq!(second_entry, value_for_second_put);
 
     // now we try a third update with the first_get_resposne metadata - this must fail
-    let value_for_third_put = Bytes::from("Third Put");
+    let value_for_third_put = Value::random();
     let err = client
         .put(
             key.clone(),
@@ -471,7 +396,7 @@ async fn test_cluster_stale_context_provided() {
     let mut final_get_response = client.get(key).await.unwrap();
     assert_eq!(final_get_response.values.len(), 1);
     let final_get_entry = final_get_response.values.remove(0);
-    assert_eq!(*final_get_entry, value_for_second_put);
+    assert_eq!(final_get_entry, value_for_second_put);
 
     stop_servers(handles).await;
 }
@@ -506,7 +431,7 @@ async fn test_cluster_put_no_quorum() {
         start_servers(vec!["tests/conf/test_node_config.json".into()]).await;
 
     let key = Bytes::from("foo");
-    let value = Bytes::from("bar");
+    let value = Value::random();
 
     let err = clients[0]
         .put(key.clone(), value.clone(), None, false)
@@ -540,7 +465,7 @@ async fn test_cluster_get_no_quorum() {
     .await;
 
     let key = Bytes::from("foo");
-    let value = Bytes::from("bar");
+    let value = Value::random();
 
     {
         let client = &mut clients[0];

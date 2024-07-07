@@ -12,12 +12,12 @@ use crate::{
         ping::PingResponse,
         put::PutResponse,
         replication_get::ReplicationGetResponse,
-        types::{Context, SerializedContext, Value},
+        types::{Context, SerializedContext},
     },
     error::{Error, Result},
     persistency::{
-        storage::{metadata_evaluation, StorageEntry},
-        Metadata, MetadataEvaluation,
+        storage::{version_evaluation, StorageEntry, Value, VersionEvaluation},
+        versioning::version_vector::VersionVector,
     },
     storage_engine::{in_memory::InMemory, StorageEngine},
     test_utils::fault::{Fault, When},
@@ -110,13 +110,13 @@ impl Client for MockClient {
         match (metadata, data) {
             (None, None) => Err(Error::NotFound { key }),
             (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
-            (Some(metadata), Some(data)) => {
-                let metadata = Metadata::deserialize(0, metadata).unwrap();
+            (Some(version), Some(data)) => {
+                let version = VersionVector::deserialize(0, version).unwrap();
                 let mut context = Context::default();
-                context.merge_metadata(&metadata);
+                context.merge_version(&version);
 
                 Ok(GetResponse {
-                    values: vec![Value::new(data, 0)],
+                    values: vec![Value::new_unchecked(data)],
                     context: context.serialize().into(),
                 })
             }
@@ -129,13 +129,13 @@ impl Client for MockClient {
         match (metadata, data) {
             (None, None) => Err(Error::NotFound { key }),
             (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
-            (Some(metadata), Some(data)) => {
-                let metadata = Metadata::deserialize(0, metadata).unwrap();
+            (Some(version), Some(data)) => {
+                let version = VersionVector::deserialize(0, version).unwrap();
 
                 Ok(ReplicationGetResponse {
                     values: vec![StorageEntry {
-                        value: data,
-                        metadata,
+                        value: Value::new_unchecked(data),
+                        version,
                     }],
                 })
             }
@@ -144,21 +144,24 @@ impl Client for MockClient {
     async fn put(
         &mut self,
         key: Bytes,
-        value: Bytes,
-        context: Option<SerializedContext>,
+        value: Value,
+        context: Option<String>,
         replication: bool,
     ) -> Result<PutResponse> {
         // only support replication for now
         assert!(replication);
-        let metadata = context.unwrap().deserialize(0).unwrap().into_metadata();
+        let version = SerializedContext::from(context.unwrap())
+            .deserialize(0)
+            .unwrap()
+            .into();
         let storage_guard = self.storage.lock().await;
 
-        let existing_metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
-        if let Some(existing_metadata) = existing_metadata {
+        let existing_version = storage_guard.metadata_engine.get(&key).await.unwrap();
+        if let Some(existing_version) = existing_version {
             let deserialized_existing_metadata =
-                Metadata::deserialize(0, existing_metadata).unwrap();
-            if let MetadataEvaluation::Conflict =
-                metadata_evaluation(&metadata, &deserialized_existing_metadata)?
+                VersionVector::deserialize(0, existing_version).unwrap();
+            if let VersionEvaluation::Conflict =
+                version_evaluation(&version, &deserialized_existing_metadata)?
             {
                 return Err(Error::Internal(crate::error::Internal::Unknown {
                     reason: "Puts with conflicts are currently not implemented".to_string(),
@@ -168,10 +171,14 @@ impl Client for MockClient {
 
         storage_guard
             .metadata_engine
-            .put(key.clone(), metadata.serialize())
+            .put(key.clone(), version.serialize())
             .await
             .unwrap();
-        storage_guard.storage_engine.put(key, value).await.unwrap();
+        storage_guard
+            .storage_engine
+            .put(key, value.as_value())
+            .await
+            .unwrap();
         Ok(PutResponse {
             message: "Ok".to_string(),
         })
