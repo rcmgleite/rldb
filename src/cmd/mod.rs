@@ -132,13 +132,11 @@ impl Command {
             Command::JoinCluster(cmd) => {
                 let request_id = cmd.request_id();
                 let payload = cmd.execute(db).await;
-                let res = Message::new(
+                Message::new(
                     CMD_CLUSTER_JOIN_CLUSTER,
                     request_id,
                     Self::serialize_response_payload(payload),
-                );
-
-                res
+                )
             }
             Command::ClusterState(cmd) => {
                 let request_id = cmd.request_id();

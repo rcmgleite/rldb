@@ -361,10 +361,10 @@ impl Db {
                 Evaluation::Reached(value) => Ok(value),
                 Evaluation::NotReached => {
                     let failure_iter = quorum_result.failures.iter();
-                    if failure_iter.size_hint().0 > 0 {
-                        if quorum_result.failures.iter().all(|err| err.is_not_found()) {
-                            return Err(Error::NotFound { key: key.clone() });
-                        }
+                    if failure_iter.size_hint().0 > 0
+                        && quorum_result.failures.iter().all(|err| err.is_not_found())
+                    {
+                        return Err(Error::NotFound { key: key.clone() });
                     }
 
                     Err(Error::QuorumNotReached {

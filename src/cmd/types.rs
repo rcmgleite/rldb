@@ -42,9 +42,9 @@ impl From<String> for SerializedContext {
     }
 }
 
-impl Into<String> for SerializedContext {
-    fn into(self) -> String {
-        self.0
+impl From<SerializedContext> for String {
+    fn from(c: SerializedContext) -> Self {
+        c.0
     }
 }
 
@@ -66,9 +66,9 @@ impl Context {
     }
 }
 
-impl Into<VersionVector> for Context {
-    fn into(self) -> VersionVector {
-        self.version
+impl From<Context> for VersionVector {
+    fn from(c: Context) -> Self {
+        c.version
     }
 }
 

@@ -95,7 +95,7 @@ pub(crate) fn version_evaluation(
     lhs: &VersionVector,
     rhs: &VersionVector,
 ) -> Result<VersionEvaluation> {
-    match lhs.causality(&rhs) {
+    match lhs.causality(rhs) {
         VersionVectorOrd::HappenedBefore | VersionVectorOrd::Equals => {
             // the data we are trying to store is actually older than what's already stored.
             // This can happen due to read repair and active anti-entropy processes for instance.

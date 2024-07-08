@@ -103,7 +103,7 @@ async fn do_heartbeat_to_node(
                     );
                 }
 
-                return Err(err.into());
+                return Err(err);
             }
         }
     };
@@ -125,7 +125,7 @@ async fn do_heartbeat_to_node(
             event!(Level::WARN, "Unable to mark node as offline: {}", err);
         }
 
-        Err(err.into())
+        Err(err)
     } else {
         event!(
             Level::TRACE,
