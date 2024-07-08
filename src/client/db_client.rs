@@ -1,7 +1,6 @@
 //! A concrete [`Client`] implementation for rldb
 use async_trait::async_trait;
 use bytes::Bytes;
-use rand::{distributions::Alphanumeric, Rng};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::{event, Level};
@@ -15,6 +14,7 @@ use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
 use crate::persistency::storage::Value;
 use crate::server::message::Message;
+use crate::utils::generate_random_ascii_string;
 use crate::{cluster::state::Node, cmd::replication_get::ReplicationGetResponse};
 
 use super::{Client, Factory};
@@ -185,9 +185,5 @@ impl Factory for DbClientFactory {
 // dummy function to generate request ids.. probably better to change this to uuid or some other good
 // requestid type
 fn generate_request_id() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .map(char::from)
-        .collect()
+    generate_random_ascii_string(10)
 }

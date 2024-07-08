@@ -2,11 +2,10 @@ use crate::{
     cmd::types::SerializedContext,
     error::{Error, InvalidRequest, Result},
     storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
-    utils::serde_utf8_bytes,
+    utils::{generate_random_ascii_string, serde_utf8_bytes},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crc32c::crc32c;
-use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use std::{mem::size_of, sync::Arc};
 use tracing::{event, Level};
@@ -24,7 +23,7 @@ pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
 /// multiples values associated with a single key. This is required for a database that uses leaderless replication
 /// as conflicts might occur due to concurrent puts happening on different nodes.
 /// When a conflict is detected, the put still succeeds but both values are stored.
-/// A followup PUT with the appropriate [`Metadata`] is required to resolve the conflict.
+/// A followup PUT with the appropriate [`SerializedContext`] is required to resolve the conflict.
 #[derive(Debug)]
 pub struct Storage {
     data_engine: StorageEngine,
@@ -70,13 +69,7 @@ impl Value {
     }
 
     pub fn random() -> Self {
-        let value: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
-        let value: Bytes = value.into();
-        Self::new_unchecked(value)
+        Self::new_unchecked(generate_random_ascii_string(10).into())
     }
 }
 

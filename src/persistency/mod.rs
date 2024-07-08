@@ -23,12 +23,13 @@ use crate::{
     error::{Error, Internal, InvalidRequest, Result},
 };
 
-pub type ClientFactory = Box<dyn Factory + Send + Sync>;
+pub type ClientFactory = Arc<dyn Factory + Send + Sync>;
 
 /// Db is the abstraction that connects storage_engine and overall database state
 /// in a single interface.
 /// It exists mainly to hide [`StorageEngine`] and [`ClusterState`] details so that they can
 /// be updated later on..
+#[derive(Clone)]
 pub struct Db {
     /// [`StorageEngine`] and a Metadata engine wrapped on a mutex.
     /// TODO/FIXME: This is bad because it means that every operations locks
@@ -53,7 +54,7 @@ impl std::fmt::Debug for Db {
 }
 
 /// State of the current node
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum State {
     /// Node is running and actively handling incoming requests
     Active { shared: Arc<Shared> },
@@ -438,7 +439,7 @@ mod tests {
     use crate::{
         client::mock::MockClientFactoryBuilder,
         cluster::state::{Node, State},
-        cmd::types::Context,
+        cmd::types::{Context, SerializedContext},
         error::{Error, InvalidRequest},
         persistency::{
             partitioning::consistent_hashing::ConsistentHashing, process_id, storage::Value,
@@ -446,6 +447,7 @@ mod tests {
         },
         server::config::Quorum,
         storage_engine::in_memory::InMemory,
+        utils::generate_random_ascii_string,
     };
 
     /// Initializes a [`Db`] instance with 2 [`crate::client::mock::MockClient`]
@@ -482,7 +484,7 @@ mod tests {
                 own_local_addr,
                 storage_engine,
                 cluster_state,
-                Box::new(MockClientFactoryBuilder::new().build()),
+                Arc::new(MockClientFactoryBuilder::new().build()),
             )),
         )
     }
@@ -587,7 +589,7 @@ mod tests {
             own_local_addr,
             storage_engine,
             cluster_state,
-            Box::new(MockClientFactoryBuilder::new().build()),
+            Arc::new(MockClientFactoryBuilder::new().build()),
         ));
         let key = Bytes::from("a key");
         let value = Value::random();
@@ -734,107 +736,87 @@ mod tests {
     // since on a PUT request, we were
     //  1. reading local metadata to check for conflicts
     //  2. update metadata as required
-    // in a non-atomic way. when we have concurrency, if 2 clients try to write at the same time
-    // and for any reason they both read the metadata at the same time, only one of them will actually have its
-    // correct value stored
-    // #[ignore]
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-    // async fn regression_test_db_concurrent_puts() {
-    //     for _ in 0..100 {
-    //         let (_, db) = initialize_state();
-    //         let key: String = rand::thread_rng()
-    //             .sample_iter(&Alphanumeric)
-    //             .take(20)
-    //             .map(char::from)
-    //             .collect();
-    //         let key: Bytes = key.into();
+    // IN A NON-ATOMIC WAY. For that reason, when we had concurrency, if 2 clients tried to write at the same time
+    // and for any reason they both read the metadata at the same time, only one of them would actually have its
+    // correct value stored and therefore would simply try to override the data that the other possibly just PUT.
+    // This test spawns 2 clients and make them both write to the same key. It asserts that a single one of them
+    // succeeds in each run (as it should).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn regression_test_db_concurrent_puts() {
+        for _ in 0..100 {
+            let (_, db) = initialize_state();
+            let key: Bytes = generate_random_ascii_string(20).into();
 
-    //         let first_value = Bytes::from("a value");
-    //         let replication = false;
+            let first_value = Value::random();
+            let replication = false;
 
-    //         db.put(key.clone(), first_value.clone(), replication, None)
-    //             .await
-    //             .unwrap();
+            db.put(key.clone(), first_value.clone(), replication, None)
+                .await
+                .unwrap();
 
-    //         let (first_get_metadata, first_get_data) =
-    //             db.get(key.clone(), replication).await.unwrap().unwrap();
+            let mut first_get_result = db.get(key.clone(), replication).await.unwrap();
 
-    //         assert_eq!(first_get_data, first_value);
+            assert_eq!(first_get_result.len(), 1);
+            let first_get_value = first_get_result.remove(0);
+            assert_eq!(first_get_value.value, first_value);
 
-    //         enum PutResult {
-    //             Success,
-    //             Failure(Error),
-    //         }
+            enum PutResult {
+                Success,
+                Failure(Error),
+            }
 
-    //         let c1_value = Bytes::from("c1_value");
-    //         let c2_value = Bytes::from("c2_value");
-    //         let c1_handle = {
-    //             let db = db.clone();
-    //             let key = key.clone();
-    //             let first_get_metadata = first_get_metadata.clone();
-    //             let c1_value = c1_value.clone();
-    //             tokio::spawn(async move {
-    //                 match db
-    //                     .put(
-    //                         key.clone(),
-    //                         c1_value.clone(),
-    //                         replication,
-    //                         Some(first_get_metadata),
-    //                     )
-    //                     .await
-    //                 {
-    //                     Ok(_) => {
-    //                         let get_result = db.get(key, false).await.unwrap().unwrap();
-    //                         assert_eq!(get_result.1, c1_value);
-    //                         PutResult::Success
-    //                     }
-    //                     Err(err) => PutResult::Failure(err),
-    //                 }
-    //             })
-    //         };
+            // A client function does a PUT followed by a GET.
+            // If the PUT was successful, we have to be able to retrieve the exact same value just put
+            // by issuing a GET.
+            async fn client(
+                db: Arc<Db>,
+                key: Bytes,
+                value: Value,
+                context: Option<SerializedContext>,
+            ) -> PutResult {
+                match db.put(key.clone(), value.clone(), false, context).await {
+                    Ok(_) => {
+                        let get_result = db.get(key, false).await.unwrap();
+                        assert_eq!(get_result.len(), 1);
+                        assert_eq!(get_result[0].value, value);
+                        PutResult::Success
+                    }
+                    Err(err) => PutResult::Failure(err),
+                }
+            }
 
-    //         let c2_handle = {
-    //             let db = db.clone();
-    //             let key = key.clone();
-    //             let first_get_metadata = first_get_metadata.clone();
-    //             let c2_value = c2_value.clone();
-    //             tokio::spawn(async move {
-    //                 match db
-    //                     .put(
-    //                         key.clone(),
-    //                         c2_value.clone(),
-    //                         replication,
-    //                         Some(first_get_metadata),
-    //                     )
-    //                     .await
-    //                 {
-    //                     Ok(_) => {
-    //                         let get_result = db.get(key, false).await.unwrap().unwrap();
-    //                         assert_eq!(get_result.1, c2_value);
-    //                         PutResult::Success
-    //                     }
-    //                     Err(err) => PutResult::Failure(err),
-    //                 }
-    //             })
-    //         };
+            let c1_value = Value::random();
+            let c2_value = Value::random();
+            let context = Context::from(first_get_value.version.clone()).serialize();
+            assert_ne!(c1_value, first_value);
+            assert_ne!(c2_value, first_value);
+            assert_ne!(c1_value, c2_value);
 
-    //         let c1_res = c1_handle.await.unwrap();
-    //         let c2_res = c2_handle.await.unwrap();
-    //         match (c1_res, c2_res) {
-    //             (PutResult::Success, PutResult::Success) => {
-    //                 panic!("If both puts succeeded, we have a bug");
-    //             }
-    //             (PutResult::Failure(err1), PutResult::Failure(err2)) => {
-    //                 panic!(
-    //                     "Both Puts failed. should never happen: err1: {:?}, err2: {:?}",
-    //                     err1, err2
-    //                 );
-    //             }
-    //             (PutResult::Success, PutResult::Failure(_))
-    //             | (PutResult::Failure(_), PutResult::Success) => {
-    //                 // expected result
-    //             }
-    //         }
-    //     }
-    // }
+            let c1_handle = tokio::spawn(client(
+                db.clone(),
+                key.clone(),
+                c1_value,
+                Some(context.clone()),
+            ));
+            let c2_handle = tokio::spawn(client(db, key, c2_value, Some(context)));
+
+            let c1_res = c1_handle.await.unwrap();
+            let c2_res = c2_handle.await.unwrap();
+            match (c1_res, c2_res) {
+                (PutResult::Success, PutResult::Success) => {
+                    panic!("If both puts succeeded, we have a bug");
+                }
+                (PutResult::Failure(err1), PutResult::Failure(err2)) => {
+                    panic!(
+                        "Both Puts failed. should never happen: err1: {:?}, err2: {:?}",
+                        err1, err2
+                    );
+                }
+                (PutResult::Success, PutResult::Failure(_))
+                | (PutResult::Failure(_), PutResult::Success) => {
+                    // expected result
+                }
+            }
+        }
+    }
 }

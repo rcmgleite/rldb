@@ -135,13 +135,16 @@ pub fn murmur3_hash(key: &[u8]) -> HashFunctionReturnType {
 #[cfg(test)]
 mod tests {
     use super::ConsistentHashing;
-    use crate::persistency::partitioning::{
-        consistent_hashing::{murmur3_hash, HashFunctionReturnType},
-        PartitioningScheme,
+    use crate::{
+        persistency::partitioning::{
+            consistent_hashing::{murmur3_hash, HashFunctionReturnType},
+            PartitioningScheme,
+        },
+        utils::generate_random_ascii_string,
     };
     use bytes::Bytes;
     use quickcheck::{quickcheck, Arbitrary};
-    use rand::{distributions::Alphanumeric, Rng};
+    use rand::Rng;
     use std::{collections::HashMap, ops::Range};
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -154,21 +157,12 @@ mod tests {
         nodes: Vec<TestNode>,
     }
 
-    fn generate_random_ascii_string(range_size: Range<usize>) -> String {
-        let string_size = rand::thread_rng().gen_range(range_size);
-        rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(string_size)
-            .map(char::from)
-            .collect()
-    }
-
     fn generate_random_nodes(range: Range<usize>) -> Vec<TestNode> {
         let n_nodes = rand::thread_rng().gen_range(range);
         let mut nodes = Vec::with_capacity(n_nodes);
         for _ in 0..n_nodes {
             nodes.push(TestNode {
-                addr: Bytes::from(generate_random_ascii_string(10..20)),
+                addr: Bytes::from(generate_random_ascii_string(20)),
             })
         }
         nodes.sort();
@@ -180,7 +174,7 @@ mod tests {
         let n_keys = rand::thread_rng().gen_range(range);
         let mut keys = Vec::with_capacity(n_keys);
         for _ in 0..n_keys {
-            keys.push(generate_random_ascii_string(1..20));
+            keys.push(generate_random_ascii_string(20));
         }
 
         keys
@@ -189,7 +183,7 @@ mod tests {
     impl Arbitrary for TestNode {
         fn arbitrary(_: &mut quickcheck::Gen) -> Self {
             Self {
-                addr: Bytes::from(generate_random_ascii_string(1..20)),
+                addr: Bytes::from(generate_random_ascii_string(20)),
             }
         }
     }

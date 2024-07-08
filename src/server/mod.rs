@@ -85,7 +85,7 @@ impl Server {
                     own_addr,
                     storage_engine,
                     cluster_state,
-                    Box::new(DbClientFactory),
+                    Arc::new(DbClientFactory),
                 )),
             })
         }

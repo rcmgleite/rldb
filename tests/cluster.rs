@@ -7,13 +7,14 @@ use std::{
 
 use bytes::Bytes;
 use error::Error;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::Rng;
 use rldb::{
     client::{db_client::DbClient, Client},
     cluster::state::NodeStatus,
-    error::{self},
+    error,
     persistency::storage::Value,
     server::Server,
+    utils::generate_random_ascii_string,
 };
 use tokio::{
     sync::oneshot::{channel, Sender},
@@ -122,12 +123,7 @@ async fn test_cluster_put_get_success() {
 
     let mut used_keys = HashSet::new();
     for _ in 0..100 {
-        let key: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(20)
-            .map(char::from)
-            .collect();
-        let key: Bytes = key.into();
+        let key: Bytes = generate_random_ascii_string(20).into();
         if used_keys.contains(&key) {
             continue;
         }
@@ -168,12 +164,7 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 10]).await;
 
-    let key: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(20)
-        .map(char::from)
-        .collect();
-    let key: Bytes = key.into();
+    let key: Bytes = generate_random_ascii_string(20).into();
 
     let value = Value::random();
 
@@ -220,12 +211,7 @@ async fn test_cluster_update_key_concurrently() {
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); n_nodes]).await;
 
-    let key: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(20)
-        .map(char::from)
-        .collect();
-    let key: Bytes = key.into();
+    let key: Bytes = generate_random_ascii_string(20).into();
 
     let value = Value::random();
 
@@ -341,12 +327,7 @@ async fn test_cluster_stale_context_provided() {
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); 3]).await;
 
-    let key: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(20)
-        .map(char::from)
-        .collect();
-    let key: Bytes = key.into();
+    let key: Bytes = generate_random_ascii_string(20).into();
 
     let value_for_first_put = Value::random();
 

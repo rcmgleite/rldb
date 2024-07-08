@@ -2,7 +2,7 @@
 //!
 //! Still WIP... might be completely removed in favor of a package like mockall
 use crate::{
-    cluster::state::Node,
+    cluster::state::{Node, State},
     cmd::{
         cluster::{
             cluster_state::ClusterStateResponse, heartbeat::HeartbeatResponse,
@@ -15,11 +15,9 @@ use crate::{
         types::{Context, SerializedContext},
     },
     error::{Error, Result},
-    persistency::{
-        storage::{version_evaluation, StorageEntry, Value, VersionEvaluation},
-        versioning::version_vector::VersionVector,
-    },
-    storage_engine::{in_memory::InMemory, StorageEngine},
+    persistency::{partitioning::consistent_hashing::ConsistentHashing, storage::Value, Db},
+    server::config::Quorum,
+    storage_engine::in_memory::InMemory,
     test_utils::fault::{Fault, When},
 };
 
@@ -29,11 +27,8 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use tokio::sync::Mutex as AsyncMutex;
 
 use super::{Client, Factory as ClientFactory};
-
-type StorageEngineType = Arc<dyn StorageEngine + Send + Sync>;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -56,29 +51,15 @@ pub struct MockClientFaults {
 pub struct MockClient {
     pub faults: MockClientFaults,
     pub stats: MockClientStats,
-    pub storage: Arc<AsyncMutex<Storage>>,
-}
-
-#[derive(Debug)]
-pub struct Storage {
-    storage_engine: StorageEngineType,
-    metadata_engine: StorageEngineType,
+    pub db: Db,
 }
 
 impl MockClient {
-    pub fn new(
-        faults: MockClientFaults,
-
-        storage_engine: StorageEngineType,
-        metadata_engine: StorageEngineType,
-    ) -> Self {
+    pub fn new(faults: MockClientFaults, db: Db) -> Self {
         Self {
             faults,
             stats: Default::default(),
-            storage: Arc::new(AsyncMutex::new(Storage {
-                storage_engine,
-                metadata_engine,
-            })),
+            db,
         }
     }
 }
@@ -104,43 +85,24 @@ impl Client for MockClient {
         todo!()
     }
     async fn get(&mut self, key: Bytes) -> Result<GetResponse> {
-        let storage_guard = self.storage.lock().await;
-        let metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
-        let data = storage_guard.storage_engine.get(&key).await.unwrap();
-        match (metadata, data) {
-            (None, None) => Err(Error::NotFound { key }),
-            (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
-            (Some(version), Some(data)) => {
-                let version = VersionVector::deserialize(0, version).unwrap();
-                let mut context = Context::default();
-                context.merge_version(&version);
+        let res = self.db.get(key, false).await?;
+        let values = res.iter().map(|e| e.value.clone()).collect();
+        let context = res.iter().fold(Context::default(), |mut acc, e| {
+            acc.merge_version(&e.version);
+            acc
+        });
 
-                Ok(GetResponse {
-                    values: vec![Value::new_unchecked(data)],
-                    context: context.serialize().into(),
-                })
-            }
-        }
+        Ok(GetResponse {
+            values,
+            context: context.serialize().into(),
+        })
     }
+
     async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse> {
-        let storage_guard = self.storage.lock().await;
-        let metadata = storage_guard.metadata_engine.get(&key).await.unwrap();
-        let data = storage_guard.storage_engine.get(&key).await.unwrap();
-        match (metadata, data) {
-            (None, None) => Err(Error::NotFound { key }),
-            (None, Some(_)) | (Some(_), None) => panic!("should never happen"),
-            (Some(version), Some(data)) => {
-                let version = VersionVector::deserialize(0, version).unwrap();
-
-                Ok(ReplicationGetResponse {
-                    values: vec![StorageEntry {
-                        value: Value::new_unchecked(data),
-                        version,
-                    }],
-                })
-            }
-        }
+        let res = self.db.get(key, true).await?;
+        Ok(ReplicationGetResponse { values: res })
     }
+
     async fn put(
         &mut self,
         key: Bytes,
@@ -148,37 +110,14 @@ impl Client for MockClient {
         context: Option<String>,
         replication: bool,
     ) -> Result<PutResponse> {
-        // only support replication for now
-        assert!(replication);
-        let version = SerializedContext::from(context.unwrap())
-            .deserialize(0)
-            .unwrap()
-            .into();
-        let storage_guard = self.storage.lock().await;
-
-        let existing_version = storage_guard.metadata_engine.get(&key).await.unwrap();
-        if let Some(existing_version) = existing_version {
-            let deserialized_existing_metadata =
-                VersionVector::deserialize(0, existing_version).unwrap();
-            if let VersionEvaluation::Conflict =
-                version_evaluation(&version, &deserialized_existing_metadata)?
-            {
-                return Err(Error::Internal(crate::error::Internal::Unknown {
-                    reason: "Puts with conflicts are currently not implemented".to_string(),
-                }));
-            }
-        }
-
-        storage_guard
-            .metadata_engine
-            .put(key.clone(), version.serialize())
-            .await
-            .unwrap();
-        storage_guard
-            .storage_engine
-            .put(key, value.as_value())
-            .await
-            .unwrap();
+        self.db
+            .put(
+                key,
+                value,
+                replication,
+                context.map(SerializedContext::from),
+            )
+            .await?;
         Ok(PutResponse {
             message: "Ok".to_string(),
         })
@@ -214,28 +153,51 @@ impl Client for MockClient {
 
 pub struct MockClientFactory {
     pub faults: MockClientFaults,
-    pub storage_engines: Arc<Mutex<HashMap<String, StorageEngineType>>>,
-    pub metadata_engines: Arc<Mutex<HashMap<String, StorageEngineType>>>,
+    pub dbs: Arc<Mutex<HashMap<String, Db>>>,
 }
 
 #[async_trait]
 impl ClientFactory for MockClientFactory {
     async fn get(&self, addr: String) -> Result<Box<dyn Client + Send>> {
-        let storage_engine = {
-            let mut guard = self.storage_engines.lock().unwrap();
-            let storage_engine = guard
-                .entry(addr.clone())
-                .or_insert(Arc::new(InMemory::default()));
-            storage_engine.clone()
+        let db = {
+            let own_addr: Bytes = addr.clone().into();
+            let cluster_state = Arc::new(
+                State::new(
+                    Box::<ConsistentHashing>::default(),
+                    own_addr.clone(),
+                    Quorum::default(),
+                )
+                .unwrap(),
+            );
+            cluster_state
+                .merge_nodes(vec![
+                    Node {
+                        addr: Bytes::from("127.0.0.1:3001"),
+                        status: crate::cluster::state::NodeStatus::Ok,
+                        tick: 0,
+                    },
+                    Node {
+                        addr: Bytes::from("127.0.0.1:3002"),
+                        status: crate::cluster::state::NodeStatus::Ok,
+                        tick: 0,
+                    },
+                ])
+                .unwrap();
+
+            let storage_engine = Arc::new(InMemory::default());
+
+            let mut guard = self.dbs.lock().unwrap();
+            let db = guard.entry(addr.clone()).or_insert(Db::new(
+                own_addr,
+                storage_engine,
+                cluster_state,
+                Arc::new(MockClientFactoryBuilder::new().build()),
+            ));
+
+            db.clone()
         };
 
-        let metadata_engine = {
-            let mut guard = self.metadata_engines.lock().unwrap();
-            let metadata_engine = guard.entry(addr).or_insert(Arc::new(InMemory::default()));
-            metadata_engine.clone()
-        };
-
-        let mut client = MockClient::new(self.faults.clone(), storage_engine, metadata_engine);
+        let mut client = MockClient::new(self.faults.clone(), db);
         client.connect().await?;
         Ok(Box::new(client))
     }
@@ -279,8 +241,7 @@ impl MockClientFactoryBuilder {
     pub fn build(self) -> MockClientFactory {
         MockClientFactory {
             faults: self.faults,
-            storage_engines: Default::default(),
-            metadata_engines: Default::default(),
+            dbs: Default::default(),
         }
     }
 }

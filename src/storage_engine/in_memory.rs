@@ -64,13 +64,10 @@ impl StorageEngine for InMemory {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-
     use super::InMemory;
-    use crate::storage_engine::StorageEngine;
+    use crate::{storage_engine::StorageEngine, utils::generate_random_ascii_string};
     use bytes::Bytes;
     use quickcheck::Arbitrary;
-    use rand::{distributions::Alphanumeric, Rng};
 
     #[tokio::test]
     async fn put_get_delete() {
@@ -106,18 +103,10 @@ mod tests {
         key_values_thread_3: Vec<String>,
     }
 
-    fn generate_random_ascii_string(range_size: Range<usize>) -> String {
-        let string_size = rand::thread_rng().gen_range(range_size);
-        rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(string_size)
-            .map(char::from)
-            .collect()
-    }
     fn generate_random_deduped_string_keys(n_keys: usize) -> Vec<String> {
         let mut nodes = Vec::with_capacity(n_keys);
         for _ in 0..n_keys {
-            nodes.push(generate_random_ascii_string(10..20))
+            nodes.push(generate_random_ascii_string(20))
         }
         nodes.sort();
         nodes.dedup_by(|a, b| a.eq_ignore_ascii_case(&b));
