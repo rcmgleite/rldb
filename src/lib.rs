@@ -8,6 +8,7 @@ pub mod error;
 pub mod persistency;
 pub mod server;
 pub mod storage_engine;
+pub mod telemetry;
 pub mod test_utils;
 pub mod utils;
 

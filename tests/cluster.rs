@@ -1,10 +1,3 @@
-use std::{
-    collections::HashSet,
-    path::PathBuf,
-    sync::atomic::Ordering::SeqCst,
-    sync::{atomic::AtomicUsize, Arc},
-};
-
 use bytes::Bytes;
 use error::Error;
 use rand::Rng;
@@ -14,7 +7,14 @@ use rldb::{
     error,
     persistency::storage::Value,
     server::Server,
+    telemetry::init_telemetry,
     utils::generate_random_ascii_string,
+};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::atomic::Ordering::SeqCst,
+    sync::{atomic::AtomicUsize, Arc},
 };
 use tokio::{
     sync::oneshot::{channel, Sender},
@@ -204,15 +204,14 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 // That is:
 //  1. Stale metadata actually returns an error
 //  2. Conflicts store multiple versions of the data as expected
-#[ignore]
 #[tokio::test]
 async fn test_cluster_update_key_concurrently() {
+    init_telemetry("http://localhost:4317/v1/traces");
     let n_nodes = 20;
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); n_nodes]).await;
 
     let key: Bytes = generate_random_ascii_string(20).into();
-
     let value = Value::random();
 
     let client = &mut clients[0];

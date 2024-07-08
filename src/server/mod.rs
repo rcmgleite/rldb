@@ -26,7 +26,7 @@ use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
-use tracing::{event, span, Instrument, Level};
+use tracing::{event, instrument, span, Instrument, Level};
 
 use self::config::Config;
 use self::message::Message;
@@ -148,6 +148,7 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
 ///    when that happens, the response will be a message with id `0`. This is odd.
 ///    makes me believe that maybe the protocol is not great still
 ///  2. On the other hand, cmd.execute return a specific Response object per command which includes failure/success cases.
+#[instrument(level = "info")]
 async fn handle_message(conn: &mut TcpStream, db: Arc<Db>) -> Result<Message> {
     let message = Message::try_from_async_read(conn).await?;
     let span = span!(Level::INFO, "cmd::execute", request_id = message.request_id);

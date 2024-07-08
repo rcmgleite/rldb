@@ -8,7 +8,7 @@ use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationSt
 use std::sync::Arc;
 use storage::{Storage, StorageEngine, StorageEntry, Value};
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{event, Level};
+use tracing::{event, instrument, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
 
 pub mod partitioning;
@@ -135,6 +135,7 @@ impl Db {
     ///   - We first have to decide if they can actually happen - might not be possible if we don't allow nodes outside the preference list
     ///     to accept puts.
     ///  3. Include integrity checks (checksums) on both data and metadata
+    #[instrument(level = "info")]
     pub async fn put(
         &self,
         key: Bytes,
@@ -310,6 +311,7 @@ impl Db {
     ///    - this will mean merging [`VersionVector`]s so that the client receives the merged version alongside an array of objects
     ///  2. Handle integrity checks properly
     ///  3. Implement Read Repair
+    #[instrument(level = "info")]
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Vec<StorageEntry>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");

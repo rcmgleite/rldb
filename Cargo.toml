@@ -29,6 +29,10 @@ futures = "0.3.30"
 hex = "0.4"
 local-ip-address = "0.6.1"
 murmur3 = "0.5.2"
+opentelemetry = { version = "0.19.0", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.12.0", features = ["reqwest-client", "reqwest-rustls", "http-proto"] }
+opentelemetry-semantic-conventions = "0.11.0"
+reqwest = {version = "0.11.18", features = ["json"] }
 quickcheck = "1.0.3"
 quickcheck_async = "0.1.1"
 quickcheck_macros = "1.0.0"
@@ -36,5 +40,7 @@ rand = "0.8.5"
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 tokio = {version = "1.35", features = ["full"]}
-tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing = "0.1.36"
+tracing-bunyan-formatter = "0.3.3"
+tracing-opentelemetry = "0.19.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

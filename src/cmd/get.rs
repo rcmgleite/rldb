@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::error::Result;
 use crate::persistency::storage::Value;
@@ -24,7 +25,7 @@ use super::types::Context;
 
 pub const GET_CMD: u32 = 2;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Get {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
@@ -39,6 +40,7 @@ impl Get {
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
     ///
+    #[instrument(level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
         let res = db.get(self.key.clone(), false).await?;
         // TODO: Include the proper crc of the value that has to be provided by storage

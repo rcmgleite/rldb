@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::error::Result;
 use crate::persistency::storage::Value;
@@ -15,7 +16,7 @@ use super::types::SerializedContext;
 pub const PUT_CMD: u32 = 3;
 
 /// Struct that represents a deserialized Put payload
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Put {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
@@ -58,6 +59,7 @@ impl Put {
     }
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
+    #[instrument(level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
         db.put(
             self.key,
