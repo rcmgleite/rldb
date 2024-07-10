@@ -8,7 +8,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crc32c::crc32c;
 use serde::{Deserialize, Serialize};
 use std::{mem::size_of, sync::Arc};
-use tracing::{event, Level};
+use tracing::{event, instrument, Level};
 
 use super::versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
 
@@ -125,6 +125,7 @@ impl Storage {
         }
     }
 
+    #[instrument(name = "storage::put", level = "info", skip(self))]
     pub async fn put(
         &self,
         key: Bytes,
@@ -153,11 +154,6 @@ impl Storage {
             version: new_version.into(),
         };
 
-        // entries_to_store.push(StorageEntry {
-        //     value,
-        //     version: entry.version.clone(),
-        // });
-
         for existing_entry in current_versions {
             if let VersionEvaluation::Conflict =
                 version_evaluation(&new_entry.version, &existing_entry.version)?
@@ -177,6 +173,7 @@ impl Storage {
         self.do_put(key, entries_to_store).await
     }
 
+    #[instrument(name = "storage::do_put", level = "info", skip(self))]
     async fn do_put(&self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
         let mut data_buf = BytesMut::new();
         let mut version_buf = BytesMut::new();
@@ -201,6 +198,7 @@ impl Storage {
         Ok(items)
     }
 
+    #[instrument(level = "debug")]
     fn unmarshall_entry(item: &mut Bytes) -> Result<Bytes> {
         if item.remaining() < size_of::<u32>() {
             return Err(Error::Logic {
@@ -221,6 +219,7 @@ impl Storage {
         Ok(ret)
     }
 
+    #[instrument(level = "debug")]
     fn unmarshall_entries(mut items: Bytes) -> Result<Vec<Bytes>> {
         let n_items = items.get_u32() as usize;
         let mut res = Vec::with_capacity(n_items);
@@ -231,6 +230,7 @@ impl Storage {
         Ok(res)
     }
 
+    #[instrument(level = "info", skip(self))]
     pub async fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
         let version = self
             .metadata_engine

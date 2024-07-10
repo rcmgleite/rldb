@@ -7,9 +7,11 @@ use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{event, Level};
+use tracing::{event, instrument, Level};
 
 use crate::error::{Error, InvalidRequest, Result};
+
+use super::REQUEST_ID;
 
 /// Kind of arbitrary but let's make sure a single connection can't consume more
 /// than 1Mb of memory...
@@ -32,11 +34,14 @@ pub struct Message {
 pub trait IntoMessage {
     /// Same as [`Message::id`]
     fn id(&self) -> u32;
-    /// Same as [Message::request_id]
-    fn request_id(&self) -> String;
     /// Same as [`Message::payload`]
     fn payload(&self) -> Option<Bytes> {
         None
+    }
+    fn request_id(&self) -> String {
+        REQUEST_ID
+            .try_with(|rid| rid.clone())
+            .unwrap_or("NOT_SET".to_string())
     }
 }
 
@@ -55,6 +60,7 @@ impl Message {
     /// This functions returns errors in the following cases
     ///  1. The message size is bigger than [`MAX_MESSAGE_SIZE`]
     ///  2. The message is somehow malformed (eg: less bytes were provided than the length received)
+    #[instrument(level = "info", skip(reader))]
     pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Self> {
         event!(Level::TRACE, "Will read id");
         let id = reader.read_u32().await?;

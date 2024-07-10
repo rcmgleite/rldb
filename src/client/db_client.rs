@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tracing::{event, Level};
+use tracing::{event, instrument, Level};
 
 use crate::cmd;
 use crate::cmd::cluster::cluster_state::ClusterStateResponse;
@@ -51,6 +51,7 @@ impl DbClient {
 
 #[async_trait]
 impl Client for DbClient {
+    #[instrument(name = "db_client::connect", level = "info", skip(self))]
     async fn connect(&mut self) -> Result<()> {
         match &self.state {
             DbClientState::Disconnected { addr } => {
@@ -68,20 +69,22 @@ impl Client for DbClient {
         Ok(())
     }
 
+    #[instrument(name = "db_client::ping", level = "info", skip(self))]
     async fn ping(&mut self) -> Result<PingResponse> {
-        let ping_cmd = cmd::ping::Ping::new(generate_request_id());
+        let ping_cmd = cmd::ping::Ping;
         let req = Message::from(ping_cmd).serialize();
 
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
 
         let response = Message::try_from_async_read(conn).await?;
-        event!(Level::TRACE, "{:?}", response.payload.as_ref().unwrap());
+        event!(Level::INFO, "DEBUG {:?}", response.payload);
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::get", level = "info", skip(self))]
     async fn get(&mut self, key: Bytes) -> Result<GetResponse> {
-        let get_cmd = cmd::get::Get::new(key, generate_request_id());
+        let get_cmd = cmd::get::Get::new(key);
 
         let req = Message::from(get_cmd).serialize();
 
@@ -92,9 +95,9 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::replication_get", level = "info", skip(self))]
     async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse> {
-        let replication_get_cmd =
-            cmd::replication_get::ReplicationGet::new(key, generate_request_id());
+        let replication_get_cmd = cmd::replication_get::ReplicationGet::new(key);
         let req = Message::from(replication_get_cmd).serialize();
         let conn = self.get_conn_mut()?;
         conn.write_all(&req).await?;
@@ -102,6 +105,7 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::put", level = "info", skip(self))]
     async fn put(
         &mut self,
         key: Bytes,
@@ -110,9 +114,9 @@ impl Client for DbClient {
         replication: bool,
     ) -> Result<PutResponse> {
         let put_cmd = if replication {
-            cmd::put::Put::new_replication(key, value, context, generate_request_id())
+            cmd::put::Put::new_replication(key, value, context)
         } else {
-            cmd::put::Put::new(key, value, context, generate_request_id())
+            cmd::put::Put::new(key, value, context)
         };
         let req = Message::from(put_cmd).serialize();
 
@@ -130,8 +134,9 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::heartbeat", level = "info", skip(self))]
     async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> Result<HeartbeatResponse> {
-        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes, generate_request_id());
+        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -141,14 +146,12 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::join_cluster", level = "info", skip(self))]
     async fn join_cluster(
         &mut self,
         known_cluster_node_addr: String,
     ) -> Result<JoinClusterResponse> {
-        let cmd = cmd::cluster::join_cluster::JoinCluster::new(
-            known_cluster_node_addr,
-            generate_request_id(),
-        );
+        let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -158,8 +161,9 @@ impl Client for DbClient {
         serde_json::from_slice(&response.payload.unwrap())?
     }
 
+    #[instrument(name = "db_client::cluster_state", level = "info", skip(self))]
     async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
-        let cmd = cmd::cluster::cluster_state::ClusterState::new(generate_request_id());
+        let cmd = cmd::cluster::cluster_state::ClusterState;
         let req = Message::from(cmd).serialize();
 
         let conn = self.get_conn_mut()?;
@@ -174,6 +178,7 @@ pub struct DbClientFactory;
 
 #[async_trait]
 impl Factory for DbClientFactory {
+    #[instrument(name = "db_client::factory::get", level = "info", skip(self))]
     async fn get(&self, addr: String) -> Result<Box<dyn Client + Send>> {
         let mut client = DbClient::new(addr);
         client.connect().await?;
@@ -184,6 +189,6 @@ impl Factory for DbClientFactory {
 
 // dummy function to generate request ids.. probably better to change this to uuid or some other good
 // requestid type
-fn generate_request_id() -> String {
+pub fn generate_request_id() -> String {
     generate_random_ascii_string(10)
 }

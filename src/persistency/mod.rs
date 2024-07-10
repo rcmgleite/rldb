@@ -135,7 +135,7 @@ impl Db {
     ///   - We first have to decide if they can actually happen - might not be possible if we don't allow nodes outside the preference list
     ///     to accept puts.
     ///  3. Include integrity checks (checksums) on both data and metadata
-    #[instrument(level = "info")]
+    #[instrument(name = "persistency::put", level = "info", skip(self))]
     pub async fn put(
         &self,
         key: Bytes,
@@ -145,7 +145,7 @@ impl Db {
     ) -> Result<()> {
         let preference_list = self.cluster_state.preference_list(&key)?;
         if replication {
-            event!(Level::DEBUG, "Executing a replication Put");
+            event!(Level::INFO, "Executing a replication Put");
             if !preference_list.contains(&self.cluster_state.own_addr()) {
                 return Err(Error::Internal(Internal::Logic {
                     reason: format!(
@@ -252,6 +252,7 @@ impl Db {
         Ok(())
     }
 
+    #[instrument(name = "persistency::local_put", level = "info", skip(self))]
     async fn local_put(&self, key: Bytes, value: Value, context: SerializedContext) -> Result<()> {
         let storage_guard = self.storage.lock().await;
         storage_guard.put(key, value, context).await?;
@@ -261,6 +262,7 @@ impl Db {
     }
 
     /// Wrapper function that allows the same inteface to put locally (using [`Db`]) or remotely (using [`DbClient`])
+    #[instrument(level = "info", skip(self))]
     async fn do_put(
         &self,
         key: Bytes,
@@ -273,7 +275,7 @@ impl Db {
             self.local_put(key, value, context).await?;
         } else {
             event!(
-                Level::DEBUG,
+                Level::INFO,
                 "will store key : {:?} in remote node: {:?}",
                 key,
                 dst_addr

@@ -12,8 +12,7 @@ use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
 use super::types::SerializedContext;
-
-pub const PUT_CMD: u32 = 3;
+use super::PUT_CMD;
 
 /// Struct that represents a deserialized Put payload
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,43 +22,30 @@ pub struct Put {
     value: Value,
     replication: bool,
     context: Option<String>,
-    request_id: String,
 }
 
 impl Put {
     /// Constructs a new [`Put`] [`crate::cmd::Command`]
-    pub fn new(key: Bytes, value: Value, context: Option<String>, request_id: String) -> Self {
-        Self::new_private(key, value, context, false, request_id)
+    pub fn new(key: Bytes, value: Value, context: Option<String>) -> Self {
+        Self::new_private(key, value, context, false)
     }
 
     /// constructs a new [`Put`] [`crate::cmd::Command`] for replication
-    pub fn new_replication(
-        key: Bytes,
-        value: Value,
-        context: Option<String>,
-        request_id: String,
-    ) -> Self {
-        Self::new_private(key, value, context, true, request_id)
+    pub fn new_replication(key: Bytes, value: Value, context: Option<String>) -> Self {
+        Self::new_private(key, value, context, true)
     }
 
-    fn new_private(
-        key: Bytes,
-        value: Value,
-        context: Option<String>,
-        replication: bool,
-        request_id: String,
-    ) -> Self {
+    fn new_private(key: Bytes, value: Value, context: Option<String>, replication: bool) -> Self {
         Self {
             key,
             value,
             replication,
             context,
-            request_id,
         }
     }
 
     /// Executes a [`Put`] [`crate::cmd::Command`]
-    #[instrument(level = "info")]
+    #[instrument(name = "cmd::put", level = "info", skip(db))]
     pub async fn execute(self, db: Arc<Db>) -> Result<PutResponse> {
         db.put(
             self.key,
@@ -86,14 +72,20 @@ impl IntoMessage for Put {
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
     }
-
-    fn request_id(&self) -> String {
-        self.request_id.clone()
-    }
 }
 
 /// [`Put`] response payload in its deserialized form.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PutResponse {
     pub message: String,
+}
+
+impl IntoMessage for Result<PutResponse> {
+    fn id(&self) -> u32 {
+        Put::cmd_id()
+    }
+
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
 }

@@ -10,21 +10,22 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
-use crate::{cluster::state::Node, error::Result, persistency::Db, server::message::IntoMessage};
+use crate::{
+    cluster::state::Node, cmd::CLUSTER_HEARTBEAT_CMD, error::Result, persistency::Db,
+    server::message::IntoMessage,
+};
 
-pub const CMD_CLUSTER_HEARTBEAT: u32 = 100;
-
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Heartbeat {
     nodes: Vec<Node>,
-    request_id: String,
 }
 
 impl Heartbeat {
     /// Constructs a new heartbeat [`crate::cmd::Command`]
-    pub fn new(nodes: Vec<Node>, request_id: String) -> Self {
-        Self { nodes, request_id }
+    pub fn new(nodes: Vec<Node>) -> Self {
+        Self { nodes }
     }
 
     /// Executes a [`Heartbeat`] command
@@ -33,6 +34,7 @@ impl Heartbeat {
     /// 1. receive a heartbeat (possibly from a node that it doesn't know yet)
     /// 2. update it's view of the ring state including the possibly new node
     /// 3. responde to the heartbeat with an ACK response
+    #[instrument(name = "cmd::cluster::heartbeat", level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<HeartbeatResponse> {
         db.update_cluster_state(self.nodes)?;
 
@@ -42,17 +44,13 @@ impl Heartbeat {
     }
 
     pub fn cmd_id() -> u32 {
-        CMD_CLUSTER_HEARTBEAT
+        CLUSTER_HEARTBEAT_CMD
     }
 }
 
 impl IntoMessage for Heartbeat {
     fn id(&self) -> u32 {
         Self::cmd_id()
-    }
-
-    fn request_id(&self) -> String {
-        self.request_id.clone()
     }
 
     fn payload(&self) -> Option<Bytes> {
@@ -64,4 +62,14 @@ impl IntoMessage for Heartbeat {
 #[derive(Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     pub message: String,
+}
+
+impl IntoMessage for Result<HeartbeatResponse> {
+    fn id(&self) -> u32 {
+        Heartbeat::cmd_id()
+    }
+
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
 }

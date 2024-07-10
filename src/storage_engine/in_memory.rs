@@ -8,6 +8,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard},
 };
+use tracing::instrument;
 
 use super::{Error, Result, StorageEngine};
 
@@ -37,11 +38,13 @@ impl InMemory {
 
 #[async_trait]
 impl StorageEngine for InMemory {
+    #[instrument(name = "storage_engine::in_memory::get", level = "info", skip(self))]
     async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let guard = self.acquire_lock()?;
         Ok(guard.get(key).cloned())
     }
 
+    #[instrument(name = "storage_engine::in_memory::put", level = "info", skip(self))]
     async fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
         let mut guard = self.acquire_lock()?;
         guard
@@ -51,11 +54,14 @@ impl StorageEngine for InMemory {
         Ok(())
     }
 
+    #[instrument(level = "info", skip(self))]
     async fn delete(&self, key: &[u8]) -> Result<()> {
         let mut guard = self.acquire_lock()?;
         guard.remove(key);
         Ok(())
     }
+
+    #[instrument(level = "info", skip(self))]
     async fn keys(&self) -> Result<Vec<Bytes>> {
         let guard = self.acquire_lock()?;
         Ok(guard.keys().map(Clone::clone).collect())

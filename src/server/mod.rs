@@ -108,9 +108,7 @@ impl Server {
             tokio::select! {
                 Ok((conn, _)) = self.client_listener.accept() => {
                     let db = self.db.clone();
-                    let own_addr = conn.local_addr().unwrap().to_string();
-                    let span = span!(Level::INFO, "handle_connection", node = %own_addr);
-                    tokio::spawn(handle_connection(conn, db).instrument(span));
+                    tokio::spawn(handle_connection(conn, db));
                 }
                 _ = &mut shutdown => {
                     event!(Level::WARN, "shutting down");
@@ -141,6 +139,10 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
     }
 }
 
+tokio::task_local! {
+    pub static REQUEST_ID: String;
+}
+
 /// Function that reads a [`Message`] out of the [TcpStream], construct a [`Command`] and executes it.
 ///
 /// There are some oddities here still
@@ -148,11 +150,23 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
 ///    when that happens, the response will be a message with id `0`. This is odd.
 ///    makes me believe that maybe the protocol is not great still
 ///  2. On the other hand, cmd.execute return a specific Response object per command which includes failure/success cases.
-#[instrument(level = "info")]
+///
+/// Another possibly interesting/odd behavior of this function is that it injects the request_id on the task local storage
+/// for further usage.
+#[instrument(level = "info", skip(db))]
 async fn handle_message(conn: &mut TcpStream, db: Arc<Db>) -> Result<Message> {
     let message = Message::try_from_async_read(conn).await?;
-    let span = span!(Level::INFO, "cmd::execute", request_id = message.request_id);
-    let cmd = Command::try_from_message(message)?;
 
-    Ok(cmd.execute(db.clone()).instrument(span).await)
+    REQUEST_ID
+        .scope(message.request_id.clone(), async move {
+            let span = span!(Level::INFO, "cmd::execute", request_id = message.request_id);
+
+            let cmd = {
+                let _guard = span.enter();
+                Command::try_from_message(message)?
+            };
+
+            Ok(cmd.execute(db.clone()).instrument(span).await)
+        })
+        .await
 }

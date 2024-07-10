@@ -15,7 +15,6 @@ pub mod types;
 
 use std::sync::Arc;
 
-use bytes::Bytes;
 use cluster::cluster_state::ClusterState as ClusterStateCommand;
 use cluster::heartbeat::Heartbeat as HeartbeatCommand;
 use cluster::join_cluster::JoinCluster as JoinClusterCommand;
@@ -23,28 +22,29 @@ use get::Get as GetCommand;
 use ping::Ping as PingCommand;
 use put::Put as PutCommand;
 use replication_get::ReplicationGet as ReplicationGetCommand;
-use serde::Serialize;
-use tracing::{event, Level};
+use tracing::{event, instrument, Level};
 
 use crate::{
-    cmd::{
-        cluster::{heartbeat::CMD_CLUSTER_HEARTBEAT, join_cluster::CMD_CLUSTER_JOIN_CLUSTER},
-        get::GET_CMD,
-        ping::PING_CMD,
-        put::PUT_CMD,
-        replication_get::REPLICATION_GET_CMD,
-    },
     error::{Error, InvalidRequest, Result},
     persistency::Db,
-    server::message::{IntoMessage, Message},
+    server::message::Message,
 };
 
-use self::cluster::cluster_state::CMD_CLUSTER_CLUSTER_STATE;
+/// Command ids used to figure out the layout of the payload to be parsed from a [`Message`]
+pub(crate) const GET_CMD: u32 = 1;
+pub(crate) const REPLICATION_GET_CMD: u32 = 2;
+pub(crate) const PUT_CMD: u32 = 3;
+pub(crate) const PING_CMD: u32 = 4;
+
+pub(crate) const CLUSTER_HEARTBEAT_CMD: u32 = 101;
+pub(crate) const CLUSTER_JOIN_CLUSTER_CMD: u32 = 102;
+pub(crate) const CLUSTER_CLUSTER_STATE_CMD: u32 = 103;
 
 /// Command definition - this enum contains all commands implemented by rldb.
 ///
 /// TODO: Note - we are mixing cluster and client commands here... it might be better to split them in the future.
 /// right now a cluster command issued against the client port will run normally which is a bit weird...
+#[derive(Debug)]
 pub enum Command {
     Ping(PingCommand),
     Get(GetCommand),
@@ -82,71 +82,16 @@ macro_rules! try_from_message_with_payload {
 
 impl Command {
     /// Executes a given command by forwarding the [`Db`] instance provided
+    #[instrument(name = "cmd::execute", level = "info", skip(db))]
     pub async fn execute(self, db: Arc<Db>) -> Message {
         match self {
-            Command::Ping(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute().await;
-                Message::new(
-                    PING_CMD,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::Get(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    GET_CMD,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::ReplicationGet(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    REPLICATION_GET_CMD,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::Put(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    PUT_CMD,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::Heartbeat(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    CMD_CLUSTER_HEARTBEAT,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::JoinCluster(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    CMD_CLUSTER_JOIN_CLUSTER,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
-            Command::ClusterState(cmd) => {
-                let request_id = cmd.request_id();
-                let payload = cmd.execute(db).await;
-                Message::new(
-                    CMD_CLUSTER_CLUSTER_STATE,
-                    request_id,
-                    Self::serialize_response_payload(payload),
-                )
-            }
+            Command::Ping(cmd) => cmd.execute().await.into(),
+            Command::Get(cmd) => cmd.execute(db).await.into(),
+            Command::ReplicationGet(cmd) => cmd.execute(db).await.into(),
+            Command::Put(cmd) => cmd.execute(db).await.into(),
+            Command::Heartbeat(cmd) => cmd.execute(db).await.into(),
+            Command::JoinCluster(cmd) => cmd.execute(db).await.into(),
+            Command::ClusterState(cmd) => cmd.execute(db).await.into(),
         }
     }
 
@@ -154,9 +99,10 @@ impl Command {
     ///
     /// # Errors
     /// returns an error if the payload doesn't conform with the specified [`Command`]
+    #[instrument(level = "info")]
     pub fn try_from_message(message: Message) -> Result<Command> {
         match message.id {
-            PING_CMD => Ok(Command::Ping(ping::Ping::new(message.request_id))),
+            PING_CMD => Ok(Command::Ping(ping::Ping)),
             GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
                 message, GetCommand
             )?)),
@@ -167,15 +113,15 @@ impl Command {
             PUT_CMD => Ok(Command::Put(try_from_message_with_payload!(
                 message, PutCommand
             )?)),
-            CMD_CLUSTER_HEARTBEAT => Ok(Command::Heartbeat(try_from_message_with_payload!(
+            CLUSTER_HEARTBEAT_CMD => Ok(Command::Heartbeat(try_from_message_with_payload!(
                 message,
                 HeartbeatCommand
             )?)),
-            CMD_CLUSTER_JOIN_CLUSTER => Ok(Command::JoinCluster(try_from_message_with_payload!(
+            CLUSTER_JOIN_CLUSTER_CMD => Ok(Command::JoinCluster(try_from_message_with_payload!(
                 message,
                 JoinClusterCommand
             )?)),
-            CMD_CLUSTER_CLUSTER_STATE => Ok(Command::ClusterState(try_from_message_with_payload!(
+            CLUSTER_CLUSTER_STATE_CMD => Ok(Command::ClusterState(try_from_message_with_payload!(
                 message,
                 ClusterStateCommand
             )?)),
@@ -186,11 +132,6 @@ impl Command {
                 }))
             }
         }
-    }
-
-    /// Serializes the given payload into json
-    pub(crate) fn serialize_response_payload<T: Serialize>(payload: Result<T>) -> Option<Bytes> {
-        Some(Bytes::from(serde_json::to_string(&payload).unwrap()))
     }
 }
 
@@ -206,7 +147,7 @@ mod tests {
 
     #[test]
     fn invalid_request_mixed_request_id() {
-        let put_cmd = Get::new(Bytes::from("foo"), "fake requestId".to_string());
+        let put_cmd = Get::new(Bytes::from("foo"));
         let mut message = Message::from(put_cmd);
         message.id = Put::cmd_id();
 
@@ -225,7 +166,6 @@ mod tests {
             Bytes::from("foo"),
             Value::new_unchecked(Bytes::from("bar")),
             None,
-            "requestId".to_string(),
         );
         let mut message = Message::from(put_cmd);
         message.id = 99999;
@@ -247,7 +187,6 @@ mod tests {
             Bytes::from("foo"),
             Value::new_unchecked(Bytes::from("bar")),
             None,
-            "requestId".to_string(),
         );
         let mut message = Message::from(put_cmd);
         message.payload = None;

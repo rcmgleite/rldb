@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::error::Result;
 use crate::persistency::storage::StorageEntry;
@@ -24,20 +25,20 @@ use crate::persistency::Db;
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
-pub const REPLICATION_GET_CMD: u32 = 4;
+use super::REPLICATION_GET_CMD;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ReplicationGet {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
-    request_id: String,
 }
 
 impl ReplicationGet {
-    pub fn new(key: Bytes, request_id: String) -> Self {
-        Self { key, request_id }
+    pub fn new(key: Bytes) -> Self {
+        Self { key }
     }
 
+    #[instrument(name = "cmd::replication_get", level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<ReplicationGetResponse> {
         Ok(ReplicationGetResponse {
             values: db.get(self.key.clone(), true).await?,
@@ -57,14 +58,20 @@ impl IntoMessage for ReplicationGet {
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
     }
-
-    fn request_id(&self) -> String {
-        self.request_id.clone()
-    }
 }
 
 /// The struct that represents a [`ReplicationGet`] response payload
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct ReplicationGetResponse {
     pub values: Vec<StorageEntry>,
+}
+
+impl IntoMessage for Result<ReplicationGetResponse> {
+    fn id(&self) -> u32 {
+        ReplicationGet::cmd_id()
+    }
+
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
 }

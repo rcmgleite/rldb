@@ -6,19 +6,18 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::{cluster::state::Node, error::Result, persistency::Db, server::message::IntoMessage};
-
-pub const CMD_CLUSTER_CLUSTER_STATE: u32 = 102;
+use crate::{
+    cluster::state::Node, cmd::CLUSTER_CLUSTER_STATE_CMD, error::Result, persistency::Db,
+    server::message::IntoMessage,
+};
 
 /// ClusterState deserialized [`crate::cmd::Command`]
-#[derive(Default, Serialize, Deserialize)]
-pub struct ClusterState {
-    request_id: String,
-}
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ClusterState;
 
 impl ClusterState {
-    pub fn new(request_id: String) -> Self {
-        Self { request_id }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Executes a [`ClusterState`] command.
@@ -31,17 +30,13 @@ impl ClusterState {
     }
 
     pub fn cmd_id() -> u32 {
-        CMD_CLUSTER_CLUSTER_STATE
+        CLUSTER_CLUSTER_STATE_CMD
     }
 }
 
 impl IntoMessage for ClusterState {
     fn id(&self) -> u32 {
         Self::cmd_id()
-    }
-
-    fn request_id(&self) -> String {
-        self.request_id.clone()
     }
 
     fn payload(&self) -> Option<Bytes> {
@@ -53,4 +48,14 @@ impl IntoMessage for ClusterState {
 #[derive(Serialize, Deserialize)]
 pub struct ClusterStateResponse {
     pub nodes: Vec<Node>,
+}
+
+impl IntoMessage for Result<ClusterStateResponse> {
+    fn id(&self) -> u32 {
+        ClusterState::cmd_id()
+    }
+
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
 }

@@ -22,25 +22,23 @@ use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
 use super::types::Context;
-
-pub const GET_CMD: u32 = 2;
+use super::GET_CMD;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Get {
     #[serde(with = "serde_utf8_bytes")]
     key: Bytes,
-    request_id: String,
 }
 
 impl Get {
     /// Constructs a new [`Get`] instance
-    pub fn new(key: Bytes, request_id: String) -> Self {
-        Self { key, request_id }
+    pub fn new(key: Bytes) -> Self {
+        Self { key }
     }
 
     /// Executes the [`Get`] command using the specified [`Db`] instance
     ///
-    #[instrument(level = "info")]
+    #[instrument(name = "cmd::get", level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<GetResponse> {
         let res = db.get(self.key.clone(), false).await?;
         // TODO: Include the proper crc of the value that has to be provided by storage
@@ -70,10 +68,6 @@ impl IntoMessage for Get {
     fn payload(&self) -> Option<Bytes> {
         Some(Bytes::from(serde_json::to_string(self).unwrap()))
     }
-
-    fn request_id(&self) -> String {
-        self.request_id.clone()
-    }
 }
 
 /// The struct that represents a [`Get`] response payload
@@ -86,4 +80,14 @@ pub struct GetResponse {
     pub values: Vec<Value>,
     /// An opaque byte array used for object versioning/conflict resolution
     pub context: String,
+}
+
+impl IntoMessage for Result<GetResponse> {
+    fn id(&self) -> u32 {
+        Get::cmd_id()
+    }
+
+    fn payload(&self) -> Option<Bytes> {
+        Some(Bytes::from(serde_json::to_string(self).unwrap()))
+    }
 }
