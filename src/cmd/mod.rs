@@ -146,7 +146,7 @@ mod tests {
     use bytes::Bytes;
 
     #[test]
-    fn invalid_request_mixed_request_id() {
+    fn invalid_request_mixed_message_id() {
         let put_cmd = Get::new(Bytes::from("foo"));
         let mut message = Message::from(put_cmd);
         message.id = Put::cmd_id();

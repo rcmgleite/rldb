@@ -1,6 +1,7 @@
 //! A concrete [`Client`] implementation for rldb
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::Future;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::{event, instrument, Level};
@@ -14,6 +15,7 @@ use crate::cmd::ping::PingResponse;
 use crate::cmd::put::PutResponse;
 use crate::persistency::storage::Value;
 use crate::server::message::Message;
+use crate::server::REQUEST_ID;
 use crate::utils::generate_random_ascii_string;
 use crate::{cluster::state::Node, cmd::replication_get::ReplicationGetResponse};
 
@@ -47,6 +49,17 @@ impl DbClient {
             }),
         }
     }
+
+    async fn with_request_id<F>(f: F) -> F::Output
+    where
+        F: Future,
+    {
+        if let Ok(_) = REQUEST_ID.try_with(|request_id| request_id.clone()) {
+            f.await
+        } else {
+            REQUEST_ID.scope(generate_request_id(), f).await
+        }
+    }
 }
 
 #[async_trait]
@@ -71,38 +84,47 @@ impl Client for DbClient {
 
     #[instrument(name = "db_client::ping", level = "info", skip(self))]
     async fn ping(&mut self) -> Result<PingResponse> {
-        let ping_cmd = cmd::ping::Ping;
-        let req = Message::from(ping_cmd).serialize();
+        Self::with_request_id(async move {
+            let ping_cmd = cmd::ping::Ping;
+            let req = Message::from(ping_cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
-        event!(Level::INFO, "DEBUG {:?}", response.payload);
-        serde_json::from_slice(&response.payload.unwrap())?
+            let response = Message::try_from_async_read(conn).await?;
+            event!(Level::INFO, "DEBUG {:?}", response.payload);
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::get", level = "info", skip(self))]
     async fn get(&mut self, key: Bytes) -> Result<GetResponse> {
-        let get_cmd = cmd::get::Get::new(key);
+        Self::with_request_id(async move {
+            let get_cmd = cmd::get::Get::new(key);
 
-        let req = Message::from(get_cmd).serialize();
+            let req = Message::from(get_cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
-        serde_json::from_slice(&response.payload.unwrap())?
+            let response = Message::try_from_async_read(conn).await?;
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::replication_get", level = "info", skip(self))]
     async fn replication_get(&mut self, key: Bytes) -> Result<ReplicationGetResponse> {
-        let replication_get_cmd = cmd::replication_get::ReplicationGet::new(key);
-        let req = Message::from(replication_get_cmd).serialize();
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
-        let response = Message::try_from_async_read(conn).await?;
-        serde_json::from_slice(&response.payload.unwrap())?
+        Self::with_request_id(async move {
+            let replication_get_cmd = cmd::replication_get::ReplicationGet::new(key);
+            let req = Message::from(replication_get_cmd).serialize();
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
+            let response = Message::try_from_async_read(conn).await?;
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::put", level = "info", skip(self))]
@@ -113,37 +135,43 @@ impl Client for DbClient {
         context: Option<String>,
         replication: bool,
     ) -> Result<PutResponse> {
-        let put_cmd = if replication {
-            cmd::put::Put::new_replication(key, value, context)
-        } else {
-            cmd::put::Put::new(key, value, context)
-        };
-        let req = Message::from(put_cmd).serialize();
+        Self::with_request_id(async move {
+            let put_cmd = if replication {
+                cmd::put::Put::new_replication(key, value, context)
+            } else {
+                cmd::put::Put::new(key, value, context)
+            };
+            let req = Message::from(put_cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
+            let response = Message::try_from_async_read(conn).await?;
 
-        event!(
-            Level::TRACE,
-            "put response: {:?}",
-            response.payload.as_ref().unwrap()
-        );
+            event!(
+                Level::TRACE,
+                "put response: {:?}",
+                response.payload.as_ref().unwrap()
+            );
 
-        serde_json::from_slice(&response.payload.unwrap())?
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::heartbeat", level = "info", skip(self))]
     async fn heartbeat(&mut self, known_nodes: Vec<Node>) -> Result<HeartbeatResponse> {
-        let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
-        let req = Message::from(cmd).serialize();
+        Self::with_request_id(async move {
+            let cmd = cmd::cluster::heartbeat::Heartbeat::new(known_nodes);
+            let req = Message::from(cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
-        serde_json::from_slice(&response.payload.unwrap())?
+            let response = Message::try_from_async_read(conn).await?;
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::join_cluster", level = "info", skip(self))]
@@ -151,26 +179,32 @@ impl Client for DbClient {
         &mut self,
         known_cluster_node_addr: String,
     ) -> Result<JoinClusterResponse> {
-        let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
-        let req = Message::from(cmd).serialize();
+        Self::with_request_id(async move {
+            let cmd = cmd::cluster::join_cluster::JoinCluster::new(known_cluster_node_addr);
+            let req = Message::from(cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
-        serde_json::from_slice(&response.payload.unwrap())?
+            let response = Message::try_from_async_read(conn).await?;
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 
     #[instrument(name = "db_client::cluster_state", level = "info", skip(self))]
     async fn cluster_state(&mut self) -> Result<ClusterStateResponse> {
-        let cmd = cmd::cluster::cluster_state::ClusterState;
-        let req = Message::from(cmd).serialize();
+        Self::with_request_id(async move {
+            let cmd = cmd::cluster::cluster_state::ClusterState;
+            let req = Message::from(cmd).serialize();
 
-        let conn = self.get_conn_mut()?;
-        conn.write_all(&req).await?;
+            let conn = self.get_conn_mut()?;
+            conn.write_all(&req).await?;
 
-        let response = Message::try_from_async_read(conn).await?;
-        serde_json::from_slice(&response.payload.unwrap())?
+            let response = Message::try_from_async_read(conn).await?;
+            serde_json::from_slice(&response.payload.unwrap())?
+        })
+        .await
     }
 }
 
