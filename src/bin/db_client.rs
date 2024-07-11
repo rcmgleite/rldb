@@ -40,6 +40,9 @@ enum Commands {
 
         #[arg(short)]
         value: Bytes,
+
+        #[arg(short)]
+        context: Option<String>,
     },
     #[command()]
     JoinCluster {
@@ -73,12 +76,17 @@ async fn main() -> anyhow::Result<()> {
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;
         }
-        Commands::Put { port, key, value } => {
+        Commands::Put {
+            port,
+            key,
+            value,
+            context,
+        } => {
             let mut client = DbClient::new(format!("127.0.0.1:{}", port));
             client.connect().await?;
             // FIXME: The API has to receive the CRC instead of computing it...
             let value = Value::new_unchecked(value);
-            let response = client.put(key, value, None, false).await?;
+            let response = client.put(key, value, context, false).await?;
             let mut stdout = tokio::io::stdout();
             let payload = serde_json::to_string(&response)?;
             stdout.write_all(payload.as_bytes()).await?;

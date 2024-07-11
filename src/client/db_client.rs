@@ -54,7 +54,7 @@ impl DbClient {
     where
         F: Future,
     {
-        if let Ok(_) = REQUEST_ID.try_with(|request_id| request_id.clone()) {
+        if let Ok(_) = REQUEST_ID.try_with(|_| ()) {
             f.await
         } else {
             REQUEST_ID.scope(generate_request_id(), f).await
