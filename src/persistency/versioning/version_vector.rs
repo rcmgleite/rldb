@@ -78,7 +78,8 @@ impl VersionVector {
     where
         F: FnMut(&ProcessId, &Version, &Version),
     {
-        let mut process_ids: Vec<&u128> = lhs.versions.keys().chain(rhs.versions.keys()).collect();
+        let mut process_ids: Vec<&ProcessId> =
+            lhs.versions.keys().chain(rhs.versions.keys()).collect();
         process_ids.sort();
         process_ids.dedup();
         let process_ids = process_ids.into_iter();
@@ -148,7 +149,7 @@ impl VersionVector {
 
     /// returns the expected serialized size of the given [`VersionVector`] instance
     pub fn serialized_size(&self) -> usize {
-        size_of::<u32>() + self.versions.len() * 2 * size_of::<u128>()
+        size_of::<u32>() + self.versions.len() * 2 * size_of::<ProcessId>()
     }
 
     /// Deserializes [bytes::Bytes] into [`VersionVector`]
@@ -160,7 +161,7 @@ impl VersionVector {
         }
 
         let n_items = serialized_vv.get_u32() as usize;
-        let expected_size = n_items * 2 * size_of::<u128>();
+        let expected_size = n_items * 2 * size_of::<ProcessId>();
         if serialized_vv.len() != expected_size {
             return Err(Error::Internal(crate::error::Internal::Unknown { reason: format!(
                     "buffer provided to deserialize into VersionVector has the wrong size. Expected {}, got {}",  expected_size, serialized_vv.len())}));
@@ -330,7 +331,7 @@ mod tests {
         let serialized = vv.serialize();
         assert_eq!(
             serialized.len(),
-            size_of::<u32>() + (vv.versions.len() * 2 * size_of::<u128>())
+            size_of::<u32>() + (vv.versions.len() * 2 * size_of::<ProcessId>())
         );
 
         let deserialized = VersionVector::deserialize(vv.id, serialized).unwrap();
