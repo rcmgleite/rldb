@@ -23,12 +23,14 @@ use super::{Client, Factory};
 use crate::error::{Error, Result};
 
 /// DbClient handle
+#[derive(Debug)]
 pub struct DbClient {
     /// state stores the [`DbClientState`] of this implementation
     state: DbClientState,
 }
 
 /// A [`DbClient`] can either be Connected or Disconnected
+#[derive(Debug)]
 enum DbClientState {
     Disconnected { addr: String },
     Connected { connection: TcpStream },

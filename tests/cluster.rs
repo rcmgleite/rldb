@@ -7,7 +7,6 @@ use rldb::{
     error,
     persistency::storage::Value,
     server::Server,
-    telemetry::initialize_jaeger_subscriber,
     utils::generate_random_ascii_string,
 };
 use std::{
@@ -209,10 +208,8 @@ async fn test_cluster_update_key_using_every_node_as_proxy_once() {
 // That is:
 //  1. Stale metadata actually returns an error
 //  2. Conflicts store multiple versions of the data as expected
-#[ignore]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_cluster_update_key_concurrently() {
-    initialize_jaeger_subscriber("http://localhost:4317/v1/traces");
     let n_nodes = 20;
     let (handles, mut clients) =
         start_servers(vec!["tests/conf/test_node_config.json".into(); n_nodes]).await;
@@ -228,40 +225,25 @@ async fn test_cluster_update_key_concurrently() {
 
     assert_eq!(response.message, "Ok".to_string());
 
+    let first_response = client.get(key.clone()).await.unwrap();
+    assert_eq!(first_response.values.len(), 1);
+    assert_eq!(first_response.values[0], value);
+
+    let first_context = first_response.context;
+
     let mut client_handles = Vec::new();
 
     let errors_seen: Arc<AtomicUsize> = Default::default();
-    // start the counter with 1 because we executed one PUT before looping through all clients
-    let successes_seen: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
+    let successes_seen: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     for _ in 0..clients.len() {
         let value = Value::random();
         let key = key.clone();
         let errors_seen = errors_seen.clone();
         let successes_seen = successes_seen.clone();
         let mut client = clients.remove(0);
+        let context = Some(first_context.clone());
 
-        // adding some random jitter to make sure the test is coupled with timing.
-        let sleep_jitter = rand::thread_rng().gen_range(1..=10);
         client_handles.push(tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(sleep_jitter)).await;
-            let get_response = client.get(key.clone()).await;
-
-            // This error scenario is not super easy to understand.
-            //  1. an initial PUT stores a value for the required key
-            //  2. One of the 20 concurrent PUTs we are doing start executing and overrides the value
-            //   only locally and delays the replication (time sensitive)
-            //  3. Another node does the same thing, updating only the its own local storage
-            //  4. yet Another node tries a GET while the cluster is in this inconsistent state:
-            //    [Node A: X] [Node B: Y] [Node C: Z] -> While in this state, all GETs will fail with NoQuorum
-            //  5. By the end of these 3 concurrent PUTs, we will have every value on every node - so 3 conflicts
-            //    [Node A: X,Y,Z] [Node B: X,Y,Z] [Node C: X,Y,Z]
-            let context = if get_response.is_err() {
-                errors_seen.fetch_add(1, SeqCst);
-                return;
-            } else {
-                Some(get_response.unwrap().context)
-            };
-
             match client.put(key.clone(), value.clone(), context, false).await {
                 Err(err) => match err {
                     Error::QuorumNotReached {
@@ -292,37 +274,26 @@ async fn test_cluster_update_key_concurrently() {
         client_handle.await.unwrap();
     }
 
-    // finally, since we are not allowing sloppy quorums and this test is configured for strong consistency (r: 2, w:2 n: 3), every
-    // node that we use to query should return the same data.
+    // 3 nodes will succeed because we have the number of replicas configured to 3
+    assert_eq!(successes_seen.load(SeqCst), 3);
+
     let mut returned_values = HashSet::new();
     for i in 0..handles.len() {
         let mut client = DbClient::new(handles[i].client_listener_addr.clone());
         client.connect().await.unwrap();
 
         let get_result = client.get(key.clone()).await.unwrap();
-        // We can have 3 scenarios:
-        //  1, due to the jitter, only a single PUT succeeds and all the others fail. In this case velues.len() == 1;
-        //  2, due to the jitter, only 2 PUTs can succeed (concurrently - causing a conflict)
-        //  3. due to the jitter (or lack thereof), at most 3 puts can be successful and 3 conflicting versions will be generated.
-        //    3 is the max number of conflicts in this case because only 3 nodes in the cluster can accept puts for a given key.
-        // assert_eq!(get_result.values.len(), successes_seen.load(SeqCst));
+        assert_eq!(get_result.values.len(), successes_seen.load(SeqCst));
         for v in get_result.values {
             returned_values.insert(v);
         }
     }
 
-    println!(
-        "DEBUG: success: {:?}, failures: {:?} - {:?}",
-        successes_seen.load(SeqCst),
-        errors_seen.load(SeqCst),
-        returned_values
+    assert_eq!(returned_values.len(), successes_seen.load(SeqCst));
+    assert_eq!(
+        successes_seen.load(SeqCst) + errors_seen.load(SeqCst),
+        n_nodes
     );
-
-    // assert_eq!(returned_values.len(), successes_seen.load(SeqCst));
-    // assert_eq!(
-    //     successes_seen.load(SeqCst) + errors_seen.load(SeqCst),
-    //     n_nodes + 1
-    // );
 
     stop_servers(handles).await;
 }

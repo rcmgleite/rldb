@@ -745,7 +745,7 @@ mod tests {
     // correct value stored and therefore would simply try to override the data that the other possibly just PUT.
     // This test spawns 2 clients and make them both write to the same key. It asserts that a single one of them
     // succeeds in each run (as it should).
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn regression_test_db_concurrent_puts() {
         for _ in 0..100 {
             let (_, db) = initialize_state();
