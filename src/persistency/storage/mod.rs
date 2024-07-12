@@ -1,7 +1,7 @@
 use crate::{
     cmd::types::SerializedContext,
     error::{Error, InvalidRequest, Result},
-    storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
+    persistency::storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
     utils::{generate_random_ascii_string, serde_utf8_bytes},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -266,8 +266,10 @@ mod tests {
     use super::Storage;
     use crate::{
         cmd::types::Context,
-        persistency::{storage::Value, versioning::version_vector::VersionVector},
-        storage_engine::in_memory::InMemory,
+        persistency::{
+            storage::Value, storage_engine::in_memory::InMemory,
+            versioning::version_vector::VersionVector,
+        },
     };
     use bytes::Bytes;
     use std::sync::Arc;

@@ -71,7 +71,8 @@ impl StorageEngine for InMemory {
 #[cfg(test)]
 mod tests {
     use super::InMemory;
-    use crate::{storage_engine::StorageEngine, utils::generate_random_ascii_string};
+    use crate::persistency::storage_engine::StorageEngine;
+    use crate::utils::generate_random_ascii_string;
     use bytes::Bytes;
     use quickcheck::Arbitrary;
 

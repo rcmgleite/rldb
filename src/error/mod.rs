@@ -5,6 +5,7 @@ use std::fmt::Display;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::persistency::storage_engine::Error as StorageEngineError;
 use crate::utils::serde_utf8_bytes;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,8 +77,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<crate::storage_engine::Error> for Error {
-    fn from(err: crate::storage_engine::Error) -> Self {
+impl From<StorageEngineError> for Error {
+    fn from(err: StorageEngineError) -> Self {
         Self::Internal(Internal::StorageEngine(err))
     }
 }
@@ -94,7 +95,7 @@ impl From<serde_json::Error> for Error {
 pub enum Internal {
     Logic { reason: String },
     Unknown { reason: String },
-    StorageEngine(crate::storage_engine::Error),
+    StorageEngine(StorageEngineError),
 }
 
 #[derive(Debug, Serialize, Deserialize)]

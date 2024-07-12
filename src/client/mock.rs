@@ -15,9 +15,11 @@ use crate::{
         types::{Context, SerializedContext},
     },
     error::{Error, Result},
-    persistency::{partitioning::consistent_hashing::ConsistentHashing, storage::Value, Db},
+    persistency::{
+        partitioning::consistent_hashing::ConsistentHashing, storage::Value,
+        storage_engine::in_memory::InMemory, Db,
+    },
     server::config::Quorum,
-    storage_engine::in_memory::InMemory,
     test_utils::fault::{Fault, When},
 };
 

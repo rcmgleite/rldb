@@ -1,6 +1,22 @@
 //! Module that contains the abstraction connecting the [`StorageEngine`] and [`ClusterState`] into a single interface.
 //!
 //! This interface is what a [`crate::cmd::Command`] has access to in order to execute its functionality.
+//!
+//! # PUT behavior
+//! Every node in the cluster is able to accept PUTs for any keys. 2 cases can happen:
+//!  1. The node is part of the [`crate::cluster::state::State::preference_list`] for the given key, in which case it executes the PUT as a coordinator node.
+//!   The coordinator node is responsible for handling the version bump for the key using [`VersionVector`] and tracking
+//!   quorum (using the [`Quorum`] abstraction). This means that a coordinator Node is the one that actually executes all
+//!   the replication logic.
+//!  2. THe node is NOT part of the [`crate::cluster::state::State::preference_list`] for the given key. In this case, the node works as a proxy.
+//!   It will check its own view of the cluster state and forward the PUT to the correct node.
+//!
+//! # Get behavior
+//! Similar to PUT, every node in the cluster can receive requests for any keys. If the node owns the key
+//! (ie: it's part of the key [`crate::cluster::state::State::preference_list`]),
+//! it will read from local storage plus as many remote nodes as needed to meet [`Quorum`].
+//! If it doesn't own the key, the behavior is very similar with one difference - there's
+//! no local copy to be read, so all reads are forwarded to the correct nodes based on its view of the cluster
 use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
@@ -14,6 +30,7 @@ use versioning::version_vector::{ProcessId, VersionVector};
 pub mod partitioning;
 pub mod quorum;
 pub mod storage;
+pub mod storage_engine;
 pub mod versioning;
 
 use crate::{
@@ -447,10 +464,10 @@ mod tests {
         error::{Error, InvalidRequest},
         persistency::{
             partitioning::consistent_hashing::ConsistentHashing, process_id, storage::Value,
-            versioning::version_vector::VersionVectorOrd, Db, VersionVector,
+            storage_engine::in_memory::InMemory, versioning::version_vector::VersionVectorOrd, Db,
+            VersionVector,
         },
         server::config::Quorum,
-        storage_engine::in_memory::InMemory,
         utils::generate_random_ascii_string,
     };
 

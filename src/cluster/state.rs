@@ -246,6 +246,9 @@ impl State {
         Ok(self.own_addr == self.key_owner(key)?.addr)
     }
 
+    /// A preference list is a list of cluster nodes that should contain replicas of a given key.
+    /// On both PUTs and GETs, the preference list is used by nodes to figure out where to route the
+    /// incoming requests to.
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
         let guard = self.acquire_lock()?;
         guard
