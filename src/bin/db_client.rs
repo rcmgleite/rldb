@@ -30,7 +30,6 @@ enum Commands {
         key: Bytes,
     },
     #[command()]
-    // FIXME: Allow metadata to be passed as optional
     Put {
         #[arg(short)]
         port: u16,

@@ -22,6 +22,7 @@ use get::Get as GetCommand;
 use ping::Ping as PingCommand;
 use put::Put as PutCommand;
 use replication_get::ReplicationGet as ReplicationGetCommand;
+use strum_macros::FromRepr;
 use tracing::{event, instrument, Level};
 
 use crate::{
@@ -30,15 +31,34 @@ use crate::{
     server::message::Message,
 };
 
-/// Command ids used to figure out the layout of the payload to be parsed from a [`Message`]
-pub(crate) const GET_CMD: u32 = 1;
-pub(crate) const REPLICATION_GET_CMD: u32 = 2;
-pub(crate) const PUT_CMD: u32 = 3;
-pub(crate) const PING_CMD: u32 = 4;
+#[derive(Debug, FromRepr, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CommandId {
+    NotSet = 0,
+    Ping = 1,
+    Get = 2,
+    Put = 3,
+    ReplicationGet = 4,
 
-pub(crate) const CLUSTER_HEARTBEAT_CMD: u32 = 101;
-pub(crate) const CLUSTER_JOIN_CLUSTER_CMD: u32 = 102;
-pub(crate) const CLUSTER_CLUSTER_STATE_CMD: u32 = 103;
+    // cluster commands
+    Heartbeat = 5,
+    JoinCluster = 6,
+    ClusterState = 7,
+}
+
+impl TryFrom<u8> for CommandId {
+    type Error = Error;
+
+    fn try_from(v: u8) -> std::result::Result<Self, Self::Error> {
+        if let Some(s) = Self::from_repr(v) {
+            Ok(s)
+        } else {
+            Err(Error::InvalidRequest(InvalidRequest::UnrecognizedCommand {
+                id: v,
+            }))
+        }
+    }
+}
 
 /// Command definition - this enum contains all commands implemented by rldb.
 ///
@@ -59,11 +79,11 @@ pub enum Command {
 macro_rules! try_from_message_with_payload {
     ($message:expr, $t:ident) => {{
         (|| {
-            if $message.id != $t::cmd_id() {
+            if $message.cmd_id != $t::cmd_id() {
                 return Err(Error::InvalidRequest(
                     InvalidRequest::UnableToConstructCommandFromMessage {
-                        expected_id: $t::cmd_id(),
-                        got: $message.id,
+                        expected_id: $t::cmd_id() as u8,
+                        got: $message.cmd_id as u8,
                     },
                 ));
             }
@@ -101,35 +121,32 @@ impl Command {
     /// returns an error if the payload doesn't conform with the specified [`Command`]
     #[instrument(level = "info")]
     pub fn try_from_message(message: Message) -> Result<Command> {
-        match message.id {
-            PING_CMD => Ok(Command::Ping(ping::Ping)),
-            GET_CMD => Ok(Command::Get(try_from_message_with_payload!(
+        match message.cmd_id {
+            CommandId::Ping => Ok(Command::Ping(ping::Ping)),
+            CommandId::Get => Ok(Command::Get(try_from_message_with_payload!(
                 message, GetCommand
             )?)),
-            REPLICATION_GET_CMD => Ok(Command::ReplicationGet(try_from_message_with_payload!(
-                message,
-                ReplicationGetCommand
-            )?)),
-            PUT_CMD => Ok(Command::Put(try_from_message_with_payload!(
+            CommandId::ReplicationGet => Ok(Command::ReplicationGet(
+                try_from_message_with_payload!(message, ReplicationGetCommand)?,
+            )),
+            CommandId::Put => Ok(Command::Put(try_from_message_with_payload!(
                 message, PutCommand
             )?)),
-            CLUSTER_HEARTBEAT_CMD => Ok(Command::Heartbeat(try_from_message_with_payload!(
+            CommandId::Heartbeat => Ok(Command::Heartbeat(try_from_message_with_payload!(
                 message,
                 HeartbeatCommand
             )?)),
-            CLUSTER_JOIN_CLUSTER_CMD => Ok(Command::JoinCluster(try_from_message_with_payload!(
+            CommandId::JoinCluster => Ok(Command::JoinCluster(try_from_message_with_payload!(
                 message,
                 JoinClusterCommand
             )?)),
-            CLUSTER_CLUSTER_STATE_CMD => Ok(Command::ClusterState(try_from_message_with_payload!(
+            CommandId::ClusterState => Ok(Command::ClusterState(try_from_message_with_payload!(
                 message,
                 ClusterStateCommand
             )?)),
-            _ => {
-                event!(Level::WARN, "Unrecognized command: {}", message.id);
-                Err(Error::InvalidRequest(InvalidRequest::UnrecognizedCommand {
-                    id: message.id,
-                }))
+            CommandId::NotSet => {
+                event!(Level::WARN, "CommandId not set (or set to zero)");
+                Err(Error::InvalidRequest(InvalidRequest::CommandIdNotSet))
             }
         }
     }
@@ -137,7 +154,7 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::Command;
+    use super::{Command, CommandId};
     use crate::cmd::get::Get;
     use crate::cmd::put::Put;
     use crate::error::{Error, InvalidRequest};
@@ -149,7 +166,7 @@ mod tests {
     fn invalid_request_mixed_message_id() {
         let put_cmd = Get::new(Bytes::from("foo"));
         let mut message = Message::from(put_cmd);
-        message.id = Put::cmd_id();
+        message.cmd_id = Put::cmd_id();
 
         let err = Command::try_from_message(message).err().unwrap();
         match err {
@@ -161,24 +178,20 @@ mod tests {
     }
 
     #[test]
-    fn invalid_request_unrecognized_command() {
+    fn invalid_request_command_id_not_set() {
         let put_cmd = Put::new(
             Bytes::from("foo"),
             Value::new_unchecked(Bytes::from("bar")),
             None,
         );
         let mut message = Message::from(put_cmd);
-        message.id = 99999;
+        message.cmd_id = CommandId::NotSet;
 
         let err = Command::try_from_message(message).err().unwrap();
-        match err {
-            Error::InvalidRequest(InvalidRequest::UnrecognizedCommand { id }) => {
-                assert_eq!(id, 99999);
-            }
-            _ => {
-                panic!("Unexpected error: {}", err);
-            }
-        }
+        assert!(matches!(
+            err,
+            Error::InvalidRequest(InvalidRequest::CommandIdNotSet)
+        ));
     }
 
     #[test]

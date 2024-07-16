@@ -37,7 +37,7 @@ pub mod message;
 /// The server struct definition
 pub struct Server {
     /// listener for incoming client requests
-    client_listener: TcpListener,
+    listener: TcpListener,
     /// The underlying [`Db`] used to store data and manage cluster state
     db: Arc<Db>,
 }
@@ -80,7 +80,7 @@ impl Server {
 
             let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
             Ok(Self {
-                client_listener,
+                listener: client_listener,
                 db: Arc::new(Db::new(
                     own_addr,
                     storage_engine,
@@ -92,7 +92,7 @@ impl Server {
     }
 
     pub fn client_listener_local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.client_listener.local_addr()
+        self.listener.local_addr()
     }
 
     /// This is the main loop of [`Server`]. When this is called, new TCP connections
@@ -106,7 +106,7 @@ impl Server {
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
-                Ok((conn, _)) = self.client_listener.accept() => {
+                Ok((conn, _)) = self.listener.accept() => {
                     let db = self.db.clone();
                     tokio::spawn(handle_connection(conn, db));
                 }
@@ -129,7 +129,7 @@ async fn handle_connection(mut conn: TcpStream, db: Arc<Db>) -> Result<()> {
             }
             Err(err) => {
                 let msg = Message::new(
-                    0,
+                    crate::cmd::CommandId::NotSet,
                     "UNKNOWN".to_string(),
                     Some(Bytes::from(serde_json::to_string(&err).unwrap())),
                 );

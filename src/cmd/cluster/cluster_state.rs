@@ -7,7 +7,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cluster::state::Node, cmd::CLUSTER_CLUSTER_STATE_CMD, error::Result, persistency::Db,
+    cluster::state::Node, cmd::CommandId, error::Result, persistency::Db,
     server::message::IntoMessage,
 };
 
@@ -29,13 +29,13 @@ impl ClusterState {
         })
     }
 
-    pub fn cmd_id() -> u32 {
-        CLUSTER_CLUSTER_STATE_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::ClusterState
     }
 }
 
 impl IntoMessage for ClusterState {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -51,7 +51,7 @@ pub struct ClusterStateResponse {
 }
 
 impl IntoMessage for Result<ClusterStateResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         ClusterState::cmd_id()
     }
 

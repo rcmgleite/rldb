@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    cluster::state::Node, cmd::CLUSTER_JOIN_CLUSTER_CMD, error::Result, persistency::Db,
+    cluster::state::Node, cmd::CommandId, error::Result, persistency::Db,
     server::message::IntoMessage,
 };
 
@@ -43,13 +43,13 @@ impl JoinCluster {
         })
     }
 
-    pub fn cmd_id() -> u32 {
-        CLUSTER_JOIN_CLUSTER_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::JoinCluster
     }
 }
 
 impl IntoMessage for JoinCluster {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -65,7 +65,7 @@ pub struct JoinClusterResponse {
 }
 
 impl IntoMessage for Result<JoinClusterResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         JoinCluster::cmd_id()
     }
 

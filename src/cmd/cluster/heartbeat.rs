@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    cluster::state::Node, cmd::CLUSTER_HEARTBEAT_CMD, error::Result, persistency::Db,
+    cluster::state::Node, cmd::CommandId, error::Result, persistency::Db,
     server::message::IntoMessage,
 };
 
@@ -43,13 +43,13 @@ impl Heartbeat {
         })
     }
 
-    pub fn cmd_id() -> u32 {
-        CLUSTER_HEARTBEAT_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::Heartbeat
     }
 }
 
 impl IntoMessage for Heartbeat {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -65,7 +65,7 @@ pub struct HeartbeatResponse {
 }
 
 impl IntoMessage for Result<HeartbeatResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Heartbeat::cmd_id()
     }
 

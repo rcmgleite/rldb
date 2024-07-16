@@ -12,7 +12,7 @@ use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
 use super::types::SerializedContext;
-use super::PUT_CMD;
+use super::CommandId;
 
 /// Struct that represents a deserialized Put payload
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,13 +59,13 @@ impl Put {
         })
     }
 
-    pub fn cmd_id() -> u32 {
-        PUT_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::Put
     }
 }
 
 impl IntoMessage for Put {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -81,7 +81,7 @@ pub struct PutResponse {
 }
 
 impl IntoMessage for Result<PutResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Put::cmd_id()
     }
 

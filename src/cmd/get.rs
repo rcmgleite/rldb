@@ -22,7 +22,7 @@ use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
 use super::types::Context;
-use super::GET_CMD;
+use super::CommandId;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Get {
@@ -55,13 +55,13 @@ impl Get {
     }
 
     /// returns the cmd id for [`Get`]
-    pub fn cmd_id() -> u32 {
-        GET_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::Get
     }
 }
 
 impl IntoMessage for Get {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -83,7 +83,7 @@ pub struct GetResponse {
 }
 
 impl IntoMessage for Result<GetResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Get::cmd_id()
     }
 

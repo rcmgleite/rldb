@@ -25,7 +25,7 @@ use crate::persistency::Db;
 use crate::server::message::IntoMessage;
 use crate::utils::serde_utf8_bytes;
 
-use super::REPLICATION_GET_CMD;
+use super::CommandId;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReplicationGet {
@@ -45,13 +45,13 @@ impl ReplicationGet {
         })
     }
 
-    pub fn cmd_id() -> u32 {
-        REPLICATION_GET_CMD
+    pub fn cmd_id() -> CommandId {
+        CommandId::ReplicationGet
     }
 }
 
 impl IntoMessage for ReplicationGet {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         Self::cmd_id()
     }
 
@@ -67,7 +67,7 @@ pub struct ReplicationGetResponse {
 }
 
 impl IntoMessage for Result<ReplicationGetResponse> {
-    fn id(&self) -> u32 {
+    fn cmd_id(&self) -> CommandId {
         ReplicationGet::cmd_id()
     }
 

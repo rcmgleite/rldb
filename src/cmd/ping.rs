@@ -5,7 +5,7 @@ use tracing::instrument;
 
 use crate::{error::Result, server::message::IntoMessage};
 
-use super::PING_CMD;
+use super::CommandId;
 
 #[derive(Debug, Serialize)]
 pub struct Ping;
@@ -20,8 +20,8 @@ impl Ping {
 }
 
 impl IntoMessage for Ping {
-    fn id(&self) -> u32 {
-        PING_CMD
+    fn cmd_id(&self) -> CommandId {
+        CommandId::Ping
     }
 }
 
@@ -32,8 +32,8 @@ pub struct PingResponse {
 }
 
 impl IntoMessage for Result<PingResponse> {
-    fn id(&self) -> u32 {
-        PING_CMD
+    fn cmd_id(&self) -> CommandId {
+        CommandId::Ping
     }
 
     fn payload(&self) -> Option<bytes::Bytes> {

@@ -9,7 +9,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{event, instrument, Level};
 
-use crate::error::{Error, InvalidRequest, Result};
+use crate::{
+    cmd::CommandId,
+    error::{Error, InvalidRequest, Result},
+};
 
 use super::REQUEST_ID;
 
@@ -22,7 +25,7 @@ pub const MAX_MESSAGE_SIZE: u32 = 1024 * 1024;
 #[derive(Debug)]
 pub struct Message {
     /// Message id -> used as a way of identifying the format of the payload for deserialization
-    pub id: u32,
+    pub cmd_id: CommandId,
     /// A unique request identifier - used for request tracing and debugging
     /// Note that this has to be encoded as utf8 otherwise parsing the message will fail
     pub request_id: String,
@@ -33,7 +36,7 @@ pub struct Message {
 /// A trait that has to be implemented for any structs/enums that can be transformed into a [`Message`]
 pub trait IntoMessage {
     /// Same as [`Message::id`]
-    fn id(&self) -> u32;
+    fn cmd_id(&self) -> CommandId;
     /// Same as [`Message::payload`]
     fn payload(&self) -> Option<Bytes> {
         None
@@ -47,9 +50,9 @@ pub trait IntoMessage {
 
 impl Message {
     /// Constructs a new [`Message`] with the given id and payload
-    pub fn new(id: u32, request_id: String, payload: Option<Bytes>) -> Self {
+    pub fn new(cmd_id: CommandId, request_id: String, payload: Option<Bytes>) -> Self {
         Self {
-            id,
+            cmd_id,
             request_id,
             payload,
         }
@@ -63,7 +66,7 @@ impl Message {
     #[instrument(level = "info", skip(reader))]
     pub async fn try_from_async_read<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Self> {
         event!(Level::TRACE, "Will read id");
-        let id = reader.read_u32().await?;
+        let cmd_id = CommandId::try_from(reader.read_u8().await?)?;
 
         event!(Level::TRACE, "Will read request_id_len");
         let request_id_length = reader.read_u32().await?;
@@ -118,7 +121,7 @@ impl Message {
         };
 
         Ok(Self {
-            id,
+            cmd_id,
             request_id,
             payload,
         })
@@ -128,11 +131,12 @@ impl Message {
     pub fn serialize(self) -> Bytes {
         let payload = self.payload.clone();
         let payload_len = payload.clone().map_or(0, |payload| payload.len());
-        let mut buf =
-            BytesMut::with_capacity(self.request_id.len() + payload_len + 3 * size_of::<u32>());
+        let mut buf = BytesMut::with_capacity(
+            self.request_id.len() + payload_len + 2 * size_of::<u32>() + size_of::<u8>(),
+        );
 
-        event!(Level::TRACE, "Will serialize id: {}", self.id);
-        buf.put_u32(self.id);
+        event!(Level::TRACE, "Will serialize id: {:?}", self.cmd_id);
+        buf.put_u8(self.cmd_id as u8);
         event!(
             Level::TRACE,
             "Will serialize request_id_len: {}",
@@ -162,7 +166,7 @@ impl Message {
 impl<M: IntoMessage> From<M> for Message {
     fn from(v: M) -> Self {
         Self {
-            id: v.id(),
+            cmd_id: v.cmd_id(),
             request_id: v.request_id(),
             payload: v.payload(),
         }
@@ -179,24 +183,53 @@ mod tests {
         server::message::{Message, MAX_MESSAGE_SIZE},
     };
 
-    struct MaxMessageSizeExceededAsyncRead;
+    #[derive(Default)]
+    struct MaxMessageSizeExceededAsyncRead {
+        state: State,
+    }
 
-    // Writes u32s, one at a time with value MAX_MESSAGE_SIZE + 1
-    // that's really all we need for the test `test_max_message_size_exceeded`
+    enum State {
+        Idle,
+        ReadCommandId,
+        ReadMessageSize,
+    }
+
+    impl Default for State {
+        fn default() -> Self {
+            Self::Idle
+        }
+    }
+
     impl AsyncRead for MaxMessageSizeExceededAsyncRead {
         fn poll_read(
             self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            buf.put_u32(MAX_MESSAGE_SIZE as u32 + 1);
+            match &self.state {
+                State::Idle => {
+                    buf.put_u8(1);
+                    self.get_mut().state = State::ReadCommandId;
+                }
+                State::ReadCommandId => {
+                    buf.put_u32(MAX_MESSAGE_SIZE as u32 + 1);
+                    self.get_mut().state = State::ReadMessageSize;
+                }
+                State::ReadMessageSize => {
+                    return std::task::Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "mock".to_string(),
+                    )));
+                }
+            }
+
             std::task::Poll::Ready(std::io::Result::Ok(()))
         }
     }
 
     #[tokio::test]
     async fn test_max_message_size_exceeded() {
-        let mut reader = MaxMessageSizeExceededAsyncRead;
+        let mut reader = MaxMessageSizeExceededAsyncRead::default();
         let err = Message::try_from_async_read(&mut reader)
             .await
             .err()

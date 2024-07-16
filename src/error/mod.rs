@@ -109,10 +109,11 @@ pub enum InvalidRequest {
     EmptyContextWhenOverridingKey,
     ReplicationPutMustIncludeContext,
 
-    UnableToConstructCommandFromMessage { expected_id: u32, got: u32 },
+    UnableToConstructCommandFromMessage { expected_id: u8, got: u8 },
     InvalidJsonPayload(String),
     EmptyMessagePayload,
-    UnrecognizedCommand { id: u32 },
+    UnrecognizedCommand { id: u8 },
+    CommandIdNotSet,
 }
 
 impl InvalidRequest {
