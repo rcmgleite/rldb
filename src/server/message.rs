@@ -2,7 +2,7 @@
 //!
 //! When serialized, a [`Message`] looks like the following:
 //!
-//! [4 bytes - ID][4 bytes - length of payload][payload (dynamic size)]
+//! [2 bytes - cmd_id][4 bytes - request_id len][request_id][4 bytes - length of payload][payload]
 use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -24,7 +24,7 @@ pub const MAX_MESSAGE_SIZE: u32 = 1024 * 1024;
 /// that this server uses.
 #[derive(Debug)]
 pub struct Message {
-    /// Message id -> used as a way of identifying the format of the payload for deserialization
+    /// Used as a way of identifying the format of the payload for deserialization
     pub cmd_id: CommandId,
     /// A unique request identifier - used for request tracing and debugging
     /// Note that this has to be encoded as utf8 otherwise parsing the message will fail
@@ -35,7 +35,7 @@ pub struct Message {
 
 /// A trait that has to be implemented for any structs/enums that can be transformed into a [`Message`]
 pub trait IntoMessage {
-    /// Same as [`Message::id`]
+    /// Same as [`Message::cmd_id`]
     fn cmd_id(&self) -> CommandId;
     /// Same as [`Message::payload`]
     fn payload(&self) -> Option<Bytes> {

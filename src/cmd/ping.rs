@@ -7,7 +7,7 @@ use crate::{error::Result, server::message::IntoMessage};
 
 use super::CommandId;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Ping;
 
 impl Ping {
