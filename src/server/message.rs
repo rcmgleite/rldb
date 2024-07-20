@@ -2,7 +2,7 @@
 //!
 //! When serialized, a [`Message`] looks like the following:
 //!
-//! [2 bytes - cmd_id][4 bytes - request_id len][request_id][4 bytes - length of payload][payload]
+//! |1 bytes - cmd_id||4 bytes - request_id len||request_id||4 bytes - length of payload||payload|
 use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};

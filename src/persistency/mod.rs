@@ -1,4 +1,4 @@
-//! Module that contains the abstraction connecting the [`StorageEngine`] and [`ClusterState`] into a single interface.
+//! Module that contains the abstraction connecting [`Storage`] and [`ClusterState`] into a single interface.
 //!
 //! This interface is what a [`crate::cmd::Command`] has access to in order to execute its functionality.
 //!
@@ -43,11 +43,10 @@ pub type ClientFactory = Arc<dyn Factory + Send + Sync>;
 
 /// Db is the abstraction that connects storage_engine and overall database state
 /// in a single interface.
-/// It exists mainly to hide [`StorageEngine`] and [`ClusterState`] details so that they can
+/// It exists mainly to hide [`Storage`] and [`ClusterState`] details so that they can
 /// be updated later on..
 #[derive(Clone)]
 pub struct Db {
-    /// [`StorageEngine`] and a Metadata engine wrapped on a mutex.
     /// TODO/FIXME: This is bad because it means that every operations locks
     /// the entire Storage.
     storage: Arc<AsyncMutex<Storage>>,
@@ -115,7 +114,7 @@ pub(crate) fn process_id(addr: &[u8]) -> ProcessId {
 }
 
 impl Db {
-    /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
+    /// Returns a new instance of [`Db`].
     pub fn new(
         own_addr: Bytes,
         cluster_state: Arc<ClusterState>,
@@ -132,21 +131,7 @@ impl Db {
         }
     }
 
-    /// Stores the given key and value into the underlying [`StorageEngine`]
-    ///
-    /// # Note on the format passed down to the storage engine:
-    ///  |      u32        |      u32    | variable |     u32     | variable | ...
-    ///  |Number of records| Data 1 size | Data 1   | Data 2 size |  Data    | ...
-    ///
-    /// The same format is used for metadata.
-    ///
-    /// # TODOs
-    ///  1. Handle partial successes
-    ///   - what do we do if a PUT failed but some nodes successfully wrote the data?
-    ///  2. Properly handle version / version conflicts
-    ///   - We first have to decide if they can actually happen - might not be possible if we don't allow nodes outside the preference list
-    ///     to accept puts.
-    ///  3. Include integrity checks (checksums) on both data and metadata
+    /// Stores the given key and value into the underlying [`crate::persistency::storage::Storage`]
     #[instrument(name = "persistency::put", level = "info", skip(self))]
     pub async fn put(
         &self,
@@ -741,7 +726,7 @@ mod tests {
     }
 
     // This is a very specific regression test. At commit https://github.com/rcmgleite/rldb/commit/8fd3edd4c5a8234a5994c352877a447c0c502bed
-    // we introduced a separate [`StorageEngine`] for data and metadata. The implementation created a race condition
+    // we introduced a separate storage for data and metadata. The implementation created a race condition
     // since on a PUT request, we were
     //  1. reading local metadata to check for conflicts
     //  2. update metadata as required
