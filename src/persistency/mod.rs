@@ -22,7 +22,7 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
 use std::sync::Arc;
-use storage::{Storage, StorageEngine, StorageEntry, Value};
+use storage::{Storage, StorageEntry, Value};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{event, instrument, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
@@ -30,7 +30,6 @@ use versioning::version_vector::{ProcessId, VersionVector};
 pub mod partitioning;
 pub mod quorum;
 pub mod storage;
-pub mod storage_engine;
 pub mod versioning;
 
 use crate::{
@@ -119,7 +118,6 @@ impl Db {
     /// Returns a new instance of [`Db`] with the provided [`StorageEngine`] and [`ClusterState`].
     pub fn new(
         own_addr: Bytes,
-        storage_engine: StorageEngine,
         cluster_state: Arc<ClusterState>,
         client_factory: ClientFactory,
     ) -> Self {
@@ -127,10 +125,7 @@ impl Db {
             shared: Arc::new(Shared::new(&own_addr)),
         };
         Self {
-            storage: Arc::new(AsyncMutex::new(Storage::new(
-                storage_engine,
-                own_state.pid(),
-            ))),
+            storage: Arc::new(AsyncMutex::new(Storage::new(own_state.pid()))),
             cluster_state,
             own_state,
             client_factory,
@@ -271,7 +266,7 @@ impl Db {
 
     #[instrument(name = "persistency::local_put", level = "info", skip(self))]
     async fn local_put(&self, key: Bytes, value: Value, context: SerializedContext) -> Result<()> {
-        let storage_guard = self.storage.lock().await;
+        let mut storage_guard = self.storage.lock().await;
         storage_guard.put(key, value, context).await?;
 
         // FIXME: return type
@@ -464,8 +459,7 @@ mod tests {
         error::{Error, InvalidRequest},
         persistency::{
             partitioning::consistent_hashing::ConsistentHashing, process_id, storage::Value,
-            storage_engine::in_memory::InMemory, versioning::version_vector::VersionVectorOrd, Db,
-            VersionVector,
+            versioning::version_vector::VersionVectorOrd, Db, VersionVector,
         },
         server::config::Quorum,
         utils::generate_random_ascii_string,
@@ -497,13 +491,10 @@ mod tests {
             ])
             .unwrap();
 
-        let storage_engine = Arc::new(InMemory::default());
-
         (
             own_local_addr.clone(),
             Arc::new(Db::new(
                 own_local_addr,
-                storage_engine,
                 cluster_state,
                 Arc::new(MockClientFactoryBuilder::new().build()),
             )),
@@ -604,11 +595,8 @@ mod tests {
             .unwrap(),
         );
 
-        let storage_engine = Arc::new(InMemory::default());
-
         let db = Arc::new(Db::new(
             own_local_addr,
-            storage_engine,
             cluster_state,
             Arc::new(MockClientFactoryBuilder::new().build()),
         ));

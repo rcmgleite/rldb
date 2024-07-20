@@ -1,6 +1,5 @@
 {
     "port": 0,
-    "storage_engine": "in_memory",
     "quorum": {
         "n": 3,
         "r": 2,

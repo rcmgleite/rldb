@@ -15,10 +15,7 @@ use crate::{
         types::{Context, SerializedContext},
     },
     error::{Error, Result},
-    persistency::{
-        partitioning::consistent_hashing::ConsistentHashing, storage::Value,
-        storage_engine::in_memory::InMemory, Db,
-    },
+    persistency::{partitioning::consistent_hashing::ConsistentHashing, storage::Value, Db},
     server::config::Quorum,
     test_utils::fault::{Fault, When},
 };
@@ -186,12 +183,9 @@ impl ClientFactory for MockClientFactory {
                 ])
                 .unwrap();
 
-            let storage_engine = Arc::new(InMemory::default());
-
             let mut guard = self.dbs.lock().unwrap();
             let db = guard.entry(addr.clone()).or_insert(Db::new(
                 own_addr,
-                storage_engine,
                 cluster_state,
                 Arc::new(MockClientFactoryBuilder::new().build()),
             ));

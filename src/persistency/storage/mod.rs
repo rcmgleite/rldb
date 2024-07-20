@@ -1,24 +1,18 @@
 use crate::{
     cmd::types::SerializedContext,
     error::{Error, InvalidRequest, Result},
-    persistency::storage_engine::{in_memory::InMemory, StorageEngine as StorageEngineTrait},
     utils::{generate_random_ascii_string, serde_utf8_bytes},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crc32c::crc32c;
 use serde::{Deserialize, Serialize};
-use std::{mem::size_of, sync::Arc};
+use std::{collections::HashMap, mem::size_of};
 use tracing::{event, instrument, Level};
 
 use super::versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
 
-/// type alias to the [`StorageEngine`] that makes it clonable and [`Send`]
-pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
+pub type Store = HashMap<Bytes, Bytes>;
 
-/// Since I don't know what the inner [`StorageEngine`] API should look like to enable easy integration with [`crate::persistency::VersionVector`],
-/// this intermediate type works as a facade between [`StorageEngine`] and [`crate::persistency::Db`]. This might disappear once I finally
-/// come up with a proper [`StorageEngine`] API.
-///
 /// [`Storage`] is a facade that provides the APIs for something similar to a multi-map - ie: enables a client to store
 /// multiples values associated with a single key. This is required for a database that uses leaderless replication
 /// as conflicts might occur due to concurrent puts happening on different nodes.
@@ -26,14 +20,14 @@ pub type StorageEngine = Arc<dyn StorageEngineTrait + Send + Sync + 'static>;
 /// A followup PUT with the appropriate [`SerializedContext`] is required to resolve the conflict.
 #[derive(Debug)]
 pub struct Storage {
-    data_engine: StorageEngine,
+    data_store: Store,
     /// Metadata Storage engine - currently hardcoded to be in-memory
     /// The idea of having a separate storage engine just for metadata is do that we can avoid
     /// adding framing layers to the data we want to store to append/prepend the metadata.
     /// Also, when we do PUTs, we have to validate metadata (version) prior to storing the data,
     /// and without a separate storage engine for metadata, we would always require a GET before a PUT,
     /// which introduces more overhead than needed.
-    metadata_engine: InMemory,
+    metadata_store: Store,
     pid: ProcessId,
 }
 
@@ -117,17 +111,17 @@ pub(crate) fn version_evaluation(
 }
 
 impl Storage {
-    pub fn new(data_engine: StorageEngine, pid: ProcessId) -> Self {
+    pub fn new(pid: ProcessId) -> Self {
         Self {
-            data_engine,
-            metadata_engine: InMemory::default(),
+            data_store: Default::default(),
+            metadata_store: Default::default(),
             pid,
         }
     }
 
     #[instrument(name = "storage::put", level = "info", skip(self))]
     pub async fn put(
-        &self,
+        &mut self,
         key: Bytes,
         value: Value,
         context: SerializedContext,
@@ -174,7 +168,7 @@ impl Storage {
     }
 
     #[instrument(name = "storage::do_put", level = "info", skip(self))]
-    async fn do_put(&self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
+    async fn do_put(&mut self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
         let mut data_buf = BytesMut::new();
         let mut version_buf = BytesMut::new();
         data_buf.put_u32(items.len() as u32);
@@ -192,8 +186,8 @@ impl Storage {
 
         // since the metadata is what tells us that data exists, let's store it second, only if the data was stored
         // successfully
-        self.data_engine.put(key.clone(), data_buf.freeze()).await?;
-        self.metadata_engine.put(key, version_buf.freeze()).await?;
+        self.data_store.insert(key.clone(), data_buf.freeze());
+        self.metadata_store.insert(key, version_buf.freeze());
 
         Ok(items)
     }
@@ -233,13 +227,18 @@ impl Storage {
     #[instrument(level = "info", skip(self))]
     pub async fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
         let version = self
-            .metadata_engine
+            .metadata_store
             .get(&key)
-            .await?
-            .ok_or(Error::NotFound { key: key.clone() })?;
-        let data = self.data_engine.get(&key).await?.ok_or(Error::Logic {
-            reason: "Metadata entry found but no data entry found".to_string(),
-        })?;
+            .ok_or(Error::NotFound { key: key.clone() })?
+            .clone();
+
+        let data = self
+            .data_store
+            .get(&key)
+            .ok_or(Error::Logic {
+                reason: "Metadata entry found but no data entry found".to_string(),
+            })?
+            .clone();
 
         let metadata_items = Self::unmarshall_entries(version)?;
         let data_items = Self::unmarshall_entries(data)?;
@@ -266,18 +265,14 @@ mod tests {
     use super::Storage;
     use crate::{
         cmd::types::Context,
-        persistency::{
-            storage::Value, storage_engine::in_memory::InMemory,
-            versioning::version_vector::VersionVector,
-        },
+        persistency::{storage::Value, versioning::version_vector::VersionVector},
     };
     use bytes::Bytes;
-    use std::sync::Arc;
 
     // stores the same key twice with conflicting versions and makes sure both are stored
     #[tokio::test]
     async fn test_storage_conflict() {
-        let store = Storage::new(Arc::new(InMemory::default()), 0);
+        let mut store = Storage::new(0);
 
         let key = Bytes::from("key");
         let value_pid_0 = Value::new_unchecked(Bytes::from("value 0"));

@@ -15,7 +15,6 @@ use crate::cluster::state::State;
 use crate::cmd::Command;
 use crate::error::{Error, Result};
 use crate::persistency::partitioning::consistent_hashing::ConsistentHashing;
-use crate::persistency::storage_engine::in_memory::InMemory;
 use crate::persistency::Db;
 use bytes::Bytes;
 use futures::Future;
@@ -60,10 +59,6 @@ impl Server {
         {
             let client_listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).await?;
 
-            let storage_engine = match config.storage_engine {
-                config::StorageEngine::InMemory => Arc::new(InMemory::default()),
-            };
-
             // configure the partitioning_scheme. This step already
             // includes the node itself to the ring.
             let cluster_state = match config.partitioning_scheme {
@@ -81,12 +76,7 @@ impl Server {
             let own_addr = Bytes::from(client_listener.local_addr().unwrap().to_string());
             Ok(Self {
                 listener: client_listener,
-                db: Arc::new(Db::new(
-                    own_addr,
-                    storage_engine,
-                    cluster_state,
-                    Arc::new(DbClientFactory),
-                )),
+                db: Arc::new(Db::new(own_addr, cluster_state, Arc::new(DbClientFactory))),
             })
         }
     }

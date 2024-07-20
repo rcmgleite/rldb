@@ -7,16 +7,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub struct Config {
     pub port: u16,
-    pub storage_engine: StorageEngine,
     pub partitioning_scheme: PartitioningScheme,
     pub quorum: Quorum,
     pub heartbeat: Heartbeat,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StorageEngine {
-    InMemory,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,7 +52,7 @@ mod tests {
 
     use crate::server::config::{Heartbeat, PartitioningScheme, Quorum};
 
-    use super::{Config, StorageEngine};
+    use super::Config;
 
     #[test]
     fn deserialize_cluster() {
@@ -74,7 +67,6 @@ mod tests {
             config,
             Config {
                 port: 3001,
-                storage_engine: StorageEngine::InMemory,
                 partitioning_scheme: PartitioningScheme::ConsistentHashing,
                 quorum: Quorum {
                     replicas: 3,
