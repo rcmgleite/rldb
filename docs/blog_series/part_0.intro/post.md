@@ -48,7 +48,7 @@ The way dynamo increases write (and get) availability is by using a technique ca
 
 In leaderless replicated systems, multiple nodes in the cluster can accept writes (as opposed to leader-based replication) and consistency guarantees can be configured (to some extent) by leveraging `Quorum`. To describe `Quorum`, let's go through an example in which the `Quorum` Configuration is: `replicas: 3, reads: 2, writes: 2`
 
-![leaderless_replication_quorum](https://raw.githubusercontent.com/rcmgleite/rldb/rafael-blobposts/docs/blog_series/part_0.intro/leaderless_replication_quorum.png)
+![leaderless_replication_quorum](https://raw.githubusercontent.com/rcmgleite/rldb/master/docs/blog_series/part_0.intro/leaderless_replication_quorum.png)
 
 In this example, a client sends a PUT to `Node A`. In order for the Put to be considered successful using the quorum configuration stated, 2 out of 3 replicas need to acknowledge the PUT **synchronously**. So `Node A` stores the data locally (first aknowledged put) and then forwards the request to another 2 nodes (for a total of 3 replicas as per Quorum configuration). If any of the 2 nodes acknowledge the replication Put, `Node A` can responde with success to the client.
 
@@ -67,7 +67,7 @@ in our example, `reads = 2, writes = 2, replicas = 3` -> we are following this e
 The problem with leaderless replication is: We are now open to version conflicts due to concurrent writes.
 The following image depicts a possible scenario where this would happen. Assume Quorum configuration to be `replicas 2, reads: 1, writes: 1`.
 
-![leaderless_replication_conflict](https://raw.githubusercontent.com/rcmgleite/rldb/rafael-blobposts/docs/blog_series/part_0.intro/leaderless_replication_conflict.png)
+![leaderless_replication_conflict](https://raw.githubusercontent.com/rcmgleite/rldb/master/docs/blog_series/part_0.intro/leaderless_replication_conflict.png)
 
 To detect conflicts, dynamo databases use techniques like vector clocks (or version vectors). Vector clocks will be explained in great detail in future posts.
 If a conflict is detected, both conflicting values are stored and a conflict resolution process needs to happen at a later stage. In the dynamo case, conflicts are handled by clients during `read`. When a client issues a GET for a key which has conflicting values, both values are sent as part of the response and the client has to issue a subsequent PUT to resolve to conflict with whatever value it wants to store. Again, more details on conflict resolution will be part of future posts on Get and Put API implementations.
