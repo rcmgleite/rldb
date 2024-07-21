@@ -20,24 +20,31 @@ pub enum Error {
     /// returned by the server when the request is invalid for any reason -> this means the client has to fix something
     InvalidRequest(InvalidRequest),
     /// returned during server bootstrap if any configuration is invalid
-    InvalidServerConfig { reason: String },
+    InvalidServerConfig {
+        reason: String,
+    },
     /// Internal error that should be opaque to an external client.. Since today we use the same error type
     /// for internal errors and client errors this is a bit moot
     Internal(Internal),
     /// Self explanatory
-    Io { reason: String },
+    Io {
+        reason: String,
+    },
     /// Error returned either in PUT or GET when quorum is not met
     QuorumNotReached {
         operation: String,
         reason: String,
         errors: Vec<Error>,
     },
-    /// Logic is a type of error that signifies a bug in the database.
-    Logic { reason: String },
     /// Error returned when a cluster has a single node and tries to heartbeat to self
     SingleNodeCluster,
     /// Returned when any invalid payload is returned/received by the server
-    InvalidJsonPayload { reason: String },
+    InvalidJsonPayload {
+        reason: String,
+    },
+    ClientMisuse {
+        reason: String,
+    },
 }
 
 impl Error {

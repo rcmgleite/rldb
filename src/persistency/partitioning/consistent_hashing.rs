@@ -115,9 +115,9 @@ impl PartitioningScheme for ConsistentHashing {
 impl ConsistentHashing {
     fn key_owner_index(&self, key: &[u8]) -> Result<usize> {
         if self.nodes.is_empty() {
-            return Err(Error::Logic {
+            return Err(Error::Internal(Internal::Logic {
                 reason: "Can't ask for owner if no nodes are present".to_string(),
-            });
+            }));
         }
 
         let key_hash = (self.hash_fn)(key);

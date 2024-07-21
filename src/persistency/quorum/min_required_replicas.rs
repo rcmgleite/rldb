@@ -12,7 +12,7 @@ use std::{
 };
 
 use super::{Evaluation, OperationStatus, Quorum, QuorumResult};
-use crate::error::{Error, Result};
+use crate::error::{Error, Internal, Result};
 
 /// Definition of a MinRequiredReplicas [`Quorum`] type
 #[derive(Debug)]
@@ -34,12 +34,12 @@ impl<T, E> MinRequiredReplicas<T, E> {
     /// # Error
     pub fn new(required_successes: usize) -> Result<Self> {
         if required_successes < 1 {
-            return Err(Error::Logic {
+            return Err(Error::Internal(Internal::Logic {
                 reason: format!(
                     "required_success has to be greated than 1. got{}",
                     required_successes
                 ),
-            });
+            }));
         }
 
         Ok(Self {
@@ -171,7 +171,7 @@ mod tests {
     fn test_failed_to_construct() {
         let err = MinRequiredReplicas::<(), Error>::new(0).err().unwrap();
         match err {
-            crate::error::Error::Logic { .. } => { /* noop */ }
+            crate::error::Error::Internal(Internal::Logic { .. }) => { /* noop */ }
             _ => {
                 panic!("Unexpected err {}", err);
             }

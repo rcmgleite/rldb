@@ -1,33 +1,34 @@
 use crate::{
     cmd::types::SerializedContext,
-    error::{Error, InvalidRequest, Result},
+    error::{Error, Internal, InvalidRequest, Result},
     utils::{generate_random_ascii_string, serde_utf8_bytes},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crc32c::crc32c;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, mem::size_of};
+use std::{
+    collections::HashMap,
+    mem::size_of,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use tracing::{event, instrument, Level};
 
 use super::versioning::version_vector::{ProcessId, VersionVector, VersionVectorOrd};
 
-pub type Store = HashMap<Bytes, Bytes>;
+#[derive(Debug, Default)]
+struct Store {
+    data: HashMap<Bytes, Bytes>,
+    metadata: HashMap<Bytes, Bytes>,
+}
 
 /// [`Storage`] is a facade that provides the APIs for something similar to a multi-map - ie: enables a client to store
 /// multiples values associated with a single key. This is required for a database that uses leaderless replication
 /// as conflicts might occur due to concurrent puts happening on different nodes.
 /// When a conflict is detected, the put still succeeds but both values are stored.
 /// A followup PUT with the appropriate [`SerializedContext`] is required to resolve the conflict.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Storage {
-    data_store: Store,
-    /// Metadata Storage engine - currently hardcoded to be in-memory
-    /// The idea of having a separate storage engine just for metadata is do that we can avoid
-    /// adding framing layers to the data we want to store to append/prepend the metadata.
-    /// Also, when we do PUTs, we have to validate metadata (version) prior to storing the data,
-    /// and without a separate storage engine for metadata, we would always require a GET before a PUT,
-    /// which introduces more overhead than needed.
-    metadata_store: Store,
+    store: Arc<Mutex<Store>>,
     pid: ProcessId,
 }
 
@@ -113,20 +114,33 @@ pub(crate) fn version_evaluation(
 impl Storage {
     pub fn new(pid: ProcessId) -> Self {
         Self {
-            data_store: Default::default(),
-            metadata_store: Default::default(),
+            store: Default::default(),
             pid,
         }
     }
 
+    fn acquire_store_lock(&self) -> Result<MutexGuard<Store>> {
+        self.store.lock().map_err(|_| {
+            Error::Internal(Internal::Logic {
+                reason: "Unable to acquire Storage lock. This should never happen".to_string(),
+            })
+        })
+    }
+
+    /// Implementation notes:
+    /// 1. Every PUT is preceded by a GET. This is because PUTs have to verify
+    ///  the current Version of the key that is already stored.
+    /// 2. The current implementation locks the entire store for the whole put operation. This works
+    ///  but is horrible performance-wise
     #[instrument(name = "storage::put", level = "info", skip(self))]
-    pub async fn put(
-        &mut self,
+    pub fn put(
+        &self,
         key: Bytes,
         value: Value,
         context: SerializedContext,
     ) -> Result<Vec<StorageEntry>> {
-        let current_versions = match self.get(key.clone()).await {
+        let mut store_guard = self.acquire_store_lock()?;
+        let current_versions = match self.synchronized_get(&store_guard, key.clone()) {
             Ok(current_versions) => current_versions,
             Err(Error::NotFound { .. }) => Vec::new(),
             Err(err) => {
@@ -164,11 +178,22 @@ impl Storage {
             key,
             entries_to_store
         );
-        self.do_put(key, entries_to_store).await
+        self.synchronized_put(&mut store_guard, key, entries_to_store)
     }
 
-    #[instrument(name = "storage::do_put", level = "info", skip(self))]
-    async fn do_put(&mut self, key: Bytes, items: Vec<StorageEntry>) -> Result<Vec<StorageEntry>> {
+    /// Internal function that requires the store to be locked in other
+    /// to actually make updates to the inner [`Store`]
+    #[instrument(
+        name = "storage::synchronized_put",
+        level = "info",
+        skip(self, store_guard)
+    )]
+    fn synchronized_put(
+        &self,
+        store_guard: &mut MutexGuard<Store>,
+        key: Bytes,
+        items: Vec<StorageEntry>,
+    ) -> Result<Vec<StorageEntry>> {
         let mut data_buf = BytesMut::new();
         let mut version_buf = BytesMut::new();
         data_buf.put_u32(items.len() as u32);
@@ -186,8 +211,8 @@ impl Storage {
 
         // since the metadata is what tells us that data exists, let's store it second, only if the data was stored
         // successfully
-        self.data_store.insert(key.clone(), data_buf.freeze());
-        self.metadata_store.insert(key, version_buf.freeze());
+        store_guard.data.insert(key.clone(), data_buf.freeze());
+        store_guard.metadata.insert(key, version_buf.freeze());
 
         Ok(items)
     }
@@ -195,16 +220,16 @@ impl Storage {
     #[instrument(level = "debug")]
     fn unmarshall_entry(item: &mut Bytes) -> Result<Bytes> {
         if item.remaining() < size_of::<u32>() {
-            return Err(Error::Logic {
+            return Err(Error::Internal(Internal::Logic {
                 reason: "Buffer too small".to_string(),
-            });
+            }));
         }
 
         let item_length = item.get_u32() as usize;
         if item.remaining() < item_length {
-            return Err(Error::Logic {
+            return Err(Error::Internal(Internal::Logic {
                 reason: "Buffer too small".to_string(),
-            });
+            }));
         }
 
         let mut ret = item.clone();
@@ -225,28 +250,41 @@ impl Storage {
     }
 
     #[instrument(level = "info", skip(self))]
-    pub async fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
-        let version = self
-            .metadata_store
+    pub fn get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
+        let guard = self.acquire_store_lock()?;
+        self.synchronized_get(&guard, key)
+    }
+
+    /// Inner get function that requires a lock on the inner [`Store`] for execution.
+    /// This is needed for PUT operations as they require a GET prior to the PUT to validate
+    /// metadata ([`VersionVector`])
+    #[instrument(name = "storage::synchronized_get" level = "info", skip(self, store_guard))]
+    fn synchronized_get(
+        &self,
+        store_guard: &MutexGuard<Store>,
+        key: Bytes,
+    ) -> Result<Vec<StorageEntry>> {
+        let version = store_guard
+            .metadata
             .get(&key)
             .ok_or(Error::NotFound { key: key.clone() })?
             .clone();
 
-        let data = self
-            .data_store
+        let data = store_guard
+            .data
             .get(&key)
-            .ok_or(Error::Logic {
+            .ok_or(Error::Internal(Internal::Logic {
                 reason: "Metadata entry found but no data entry found".to_string(),
-            })?
+            }))?
             .clone();
 
         let metadata_items = Self::unmarshall_entries(version)?;
         let data_items = Self::unmarshall_entries(data)?;
 
         if metadata_items.len() != data_items.len() {
-            return Err(Error::Logic {
+            return Err(Error::Internal(Internal::Logic {
                 reason: "Data and Metadata items must have the same length".to_string(),
-            });
+            }));
         }
 
         let data_and_metadata_items: Vec<StorageEntry> = std::iter::zip(metadata_items, data_items)
@@ -270,9 +308,9 @@ mod tests {
     use bytes::Bytes;
 
     // stores the same key twice with conflicting versions and makes sure both are stored
-    #[tokio::test]
-    async fn test_storage_conflict() {
-        let mut store = Storage::new(0);
+    #[test]
+    fn test_storage_conflict() {
+        let store = Storage::new(0);
 
         let key = Bytes::from("key");
         let value_pid_0 = Value::new_unchecked(Bytes::from("value 0"));
@@ -287,7 +325,6 @@ mod tests {
                 value_pid_0.clone(),
                 Context::from(version_pid_0.clone()).serialize(),
             )
-            .await
             .unwrap();
 
         let mut version_pid_1 = VersionVector::new(1);
@@ -302,10 +339,9 @@ mod tests {
                 value_pid_1.clone(),
                 Context::from(version_pid_1.clone()).serialize(),
             )
-            .await
             .unwrap();
 
-        let get_entries = store.get(key).await.unwrap();
+        let get_entries = store.get(key).unwrap();
 
         assert_eq!(get_entries.len(), 2);
         for entry in get_entries {

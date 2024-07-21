@@ -46,7 +46,7 @@ impl DbClient {
     fn get_conn_mut(&mut self) -> Result<&mut TcpStream> {
         match &mut self.state {
             DbClientState::Connected { connection } => Ok(connection),
-            DbClientState::Disconnected { .. } => Err(Error::Logic {
+            DbClientState::Disconnected { .. } => Err(Error::ClientMisuse {
                 reason: "You must call `connect` before any other method for DbClient".to_string(),
             }),
         }
@@ -75,7 +75,7 @@ impl Client for DbClient {
                 };
             }
             DbClientState::Connected { .. } => {
-                return Err(Error::Logic {
+                return Err(Error::ClientMisuse {
                     reason: "called `connect` twice on a DbClient".to_string(),
                 });
             }

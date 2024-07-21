@@ -23,7 +23,6 @@ use partitioning::consistent_hashing::murmur3_hash;
 use quorum::{min_required_replicas::MinRequiredReplicas, Evaluation, OperationStatus, Quorum};
 use std::sync::Arc;
 use storage::{Storage, StorageEntry, Value};
-use tokio::sync::Mutex as AsyncMutex;
 use tracing::{event, instrument, Level};
 use versioning::version_vector::{ProcessId, VersionVector};
 
@@ -47,9 +46,8 @@ pub type ClientFactory = Arc<dyn Factory + Send + Sync>;
 /// be updated later on..
 #[derive(Clone)]
 pub struct Db {
-    /// TODO/FIXME: This is bad because it means that every operations locks
-    /// the entire Storage.
-    storage: Arc<AsyncMutex<Storage>>,
+    /// Storage engine
+    storage: Storage,
     /// Cluster state.
     cluster_state: Arc<ClusterState>,
     /// Own state
@@ -124,7 +122,7 @@ impl Db {
             shared: Arc::new(Shared::new(&own_addr)),
         };
         Self {
-            storage: Arc::new(AsyncMutex::new(Storage::new(own_state.pid()))),
+            storage: Storage::new(own_state.pid()),
             cluster_state,
             own_state,
             client_factory,
@@ -251,8 +249,7 @@ impl Db {
 
     #[instrument(name = "persistency::local_put", level = "info", skip(self))]
     async fn local_put(&self, key: Bytes, value: Value, context: SerializedContext) -> Result<()> {
-        let mut storage_guard = self.storage.lock().await;
-        storage_guard.put(key, value, context).await?;
+        self.storage.put(key, value, context)?;
 
         // FIXME: return type
         Ok(())
@@ -300,22 +297,18 @@ impl Db {
         Ok(())
     }
 
-    /// Retrieves the [`Bytes`] associated with the given key.
+    /// Retrieves [`StorageEntry`]s associated with the given key.
     ///
-    /// If the key is not found, [Option::None] is returned
+    /// If the key is not found, [`Error::NotFound`] is returned.
     ///
     /// # TODOs
-    ///  1. Handle version conflicts
-    ///    - we have to deal with the case in which we have multiple versions of the same data encountered
-    ///    - this will mean merging [`VersionVector`]s so that the client receives the merged version alongside an array of objects
-    ///  2. Handle integrity checks properly
-    ///  3. Implement Read Repair
+    ///  1. Handle integrity checks properly
+    ///  2. Implement Read Repair
     #[instrument(level = "info")]
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Vec<StorageEntry>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");
-            let storage_guard = self.storage.lock().await;
-            Ok(storage_guard.get(key.clone()).await?)
+            Ok(self.storage.get(key.clone())?)
         } else {
             event!(Level::DEBUG, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
@@ -384,8 +377,7 @@ impl Db {
     async fn do_get(&self, key: Bytes, src_addr: Bytes) -> Result<Vec<StorageEntry>> {
         if self.owns_key(&src_addr)? {
             event!(Level::DEBUG, "Getting data from local storage");
-            let storage_guard = self.storage.lock().await;
-            Ok(storage_guard.get(key.clone()).await?)
+            Ok(self.storage.get(key.clone())?)
         } else {
             event!(
                 Level::DEBUG,

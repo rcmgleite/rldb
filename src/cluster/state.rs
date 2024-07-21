@@ -9,7 +9,7 @@
 //!
 //! Currently, the state is updated via a gossip protocol in which nodes exchange their view of the cluster
 //! to every other host. For more info, see the docs for [`super::heartbeat`].
-use crate::error::{Error, Result};
+use crate::error::{Error, Internal, Result};
 use crate::persistency::partitioning::PartitioningScheme;
 use crate::server::config::Quorum;
 use crate::utils::serde_utf8_bytes;
@@ -121,9 +121,9 @@ impl State {
         if let Ok(guard) = self.inner.lock() {
             Ok(guard)
         } else {
-            Err(Error::Logic {
+            Err(Error::Internal(Internal::Logic {
                 reason: "Unable to acquire lock".to_string(),
-            })
+            }))
         }
     }
 
@@ -202,10 +202,10 @@ impl State {
         inner_guard
             .nodes
             .get(&node_key)
-            .ok_or(Error::Logic {
+            .ok_or(Error::Internal(Internal::Logic {
                 reason: "Unable to find node inside RingState. This should never happen."
                     .to_string(),
-            })
+            }))
             .cloned()
     }
 
