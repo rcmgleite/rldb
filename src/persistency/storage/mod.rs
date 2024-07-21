@@ -296,6 +296,12 @@ impl Storage {
 
         Ok(data_and_metadata_items)
     }
+
+    /// Returns all keys currently stored.
+    pub fn list_keys(&self) -> Result<Vec<Bytes>> {
+        let guard = self.acquire_store_lock()?;
+        Ok(guard.metadata.keys().cloned().collect())
+    }
 }
 
 #[cfg(test)]

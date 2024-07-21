@@ -32,8 +32,10 @@ impl Heartbeat {
 
     /// Heartbeat flow
     /// 1. receive a heartbeat (possibly from a node that it doesn't know yet)
-    /// 2. update it's view of the ring state including the possibly new node
-    /// 3. responde to the heartbeat with an ACK response
+    /// 2. update it's view of the ring state
+    /// 3. Verify if the ring change affected itself (ie: Does this node has to send
+    ///   part of its keys to some other node?)
+    /// 4. responde to the heartbeat with an ACK response
     #[instrument(name = "cmd::cluster::heartbeat", level = "info")]
     pub async fn execute(self, db: Arc<Db>) -> Result<HeartbeatResponse> {
         db.update_cluster_state(self.nodes)?;

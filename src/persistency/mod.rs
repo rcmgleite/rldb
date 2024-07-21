@@ -28,12 +28,13 @@ use versioning::version_vector::{ProcessId, VersionVector};
 
 pub mod partitioning;
 pub mod quorum;
+pub mod rebalancing;
 pub mod storage;
 pub mod versioning;
 
 use crate::{
     client::Factory,
-    cluster::state::{Node as ClusterNode, State as ClusterState},
+    cluster::state::{ClusterMembershipChanges, Node as ClusterNode, State as ClusterState},
     cmd::types::{Context, SerializedContext},
     error::{Error, Internal, InvalidRequest, Result},
 };
@@ -71,13 +72,15 @@ impl std::fmt::Debug for Db {
 enum State {
     /// Node is running and actively handling incoming requests
     Active { shared: Arc<Shared> },
-    /// Node is synchronizing from another host.
-    /// This happens when a node either was just added to the cluster
-    /// or was offline and is now catching up for any reason
-    #[allow(dead_code)]
-    Synchronizing {
+    /// Node is a synchronization source for one or more nodes.
+    SynchronizationSource {
         shared: Arc<Shared>,
-        synchonization_src: Bytes,
+        dst: Vec<Bytes>,
+    },
+    /// Node is a synchronization destination fro one or more nodes.
+    SynchronizationDestination {
+        shared: Arc<Shared>,
+        src: Vec<Bytes>,
     },
 }
 
@@ -85,7 +88,8 @@ impl State {
     fn pid(&self) -> ProcessId {
         match self {
             State::Active { shared } => shared.pid(),
-            State::Synchronizing { shared, .. } => shared.pid(),
+            State::SynchronizationSource { shared, .. } => shared.pid(),
+            State::SynchronizationDestination { shared, .. } => shared.pid(),
         }
     }
 }
@@ -297,6 +301,10 @@ impl Db {
         Ok(())
     }
 
+    pub fn local_get(&self, key: Bytes) -> Result<Vec<StorageEntry>> {
+        self.storage.get(key)
+    }
+
     /// Retrieves [`StorageEntry`]s associated with the given key.
     ///
     /// If the key is not found, [`Error::NotFound`] is returned.
@@ -308,7 +316,7 @@ impl Db {
     pub async fn get(&self, key: Bytes, replica: bool) -> Result<Vec<StorageEntry>> {
         if replica {
             event!(Level::DEBUG, "Executing a replica GET");
-            Ok(self.storage.get(key.clone())?)
+            Ok(self.local_get(key.clone())?)
         } else {
             event!(Level::DEBUG, "executing a non-replica GET");
             let quorum_config = self.cluster_state.quorum_config();
@@ -412,7 +420,11 @@ impl Db {
     ///
     /// This is used as part of the Gossip protocol to propagate cluster changes across all nodes
     pub fn update_cluster_state(&self, nodes: Vec<ClusterNode>) -> Result<()> {
-        self.cluster_state.merge_nodes(nodes)
+        if let ClusterMembershipChanges::Yes = self.cluster_state.merge_nodes(nodes)? {
+            // TODO: kick-off synchronization somehow
+        }
+
+        Ok(())
     }
 
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
@@ -421,6 +433,10 @@ impl Db {
 
     pub fn cluster_state(&self) -> Result<Vec<ClusterNode>> {
         self.cluster_state.get_nodes()
+    }
+
+    pub fn list_keys(&self) -> Result<Vec<Bytes>> {
+        self.storage.list_keys()
     }
 }
 

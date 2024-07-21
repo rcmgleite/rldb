@@ -90,6 +90,14 @@ impl std::fmt::Debug for StateInner {
     }
 }
 
+/// This is the return type of [`State::merge_nodes`].
+/// It returns `Yes` if the merge process included a new node or removed an existing one.
+/// This is used in upper layers for detecting required rebalancing of partitions.
+pub enum ClusterMembershipChanges {
+    Yes,
+    No,
+}
+
 impl State {
     pub fn new(
         mut partitioning_scheme: Box<dyn PartitioningScheme + Send>,
@@ -142,9 +150,10 @@ impl State {
     }
     /// Merges the current ring state view with the one passed as rhs.
     /// This is used as part of the gossip protocol exchange for cluster state synchronization
-    pub fn merge_nodes(&self, nodes: Vec<Node>) -> Result<()> {
+    pub fn merge_nodes(&self, nodes: Vec<Node>) -> Result<ClusterMembershipChanges> {
         let own_addr = self.own_addr.clone();
         let mut inner_guard = self.acquire_lock()?;
+        let mut result = ClusterMembershipChanges::No;
         for node in nodes {
             if let Some(node_current_view) = inner_guard.nodes.get_mut(&node.addr) {
                 // Edge case: If a node was offline and came back, it's tick will be set to 0
@@ -163,6 +172,7 @@ impl State {
                         NodeStatus::Offline => {
                             inner_guard.nodes.remove(&node.addr);
                             inner_guard.partitioning_scheme.remove_node(&node.addr)?;
+                            result = ClusterMembershipChanges::Yes;
                         }
                         // Otherwise, let's update tick and status
                         NodeStatus::PossiblyOffline | NodeStatus::Ok => {
@@ -176,10 +186,11 @@ impl State {
                     .partitioning_scheme
                     .add_node(node.addr.clone())?;
                 inner_guard.nodes.insert(node.addr.clone(), node);
+                result = ClusterMembershipChanges::Yes;
             }
         }
 
-        Ok(())
+        Ok(result)
     }
 
     pub fn mark_node_as_possibly_offline(&self, node: Node) -> Result<()> {
@@ -249,6 +260,11 @@ impl State {
     /// A preference list is a list of cluster nodes that should contain replicas of a given key.
     /// On both PUTs and GETs, the preference list is used by nodes to figure out where to route the
     /// incoming requests to.
+    ///
+    /// FIXME: The preference list doesn't take into account [`Node::status`] - [`NodeStatus`].
+    /// This is not what the amazon paper describes. With the current implementation, if
+    /// enough nodes that should own a given key go offline, PUTs will start failing
+    /// instead of relying on sloppy quorum.
     pub fn preference_list(&self, key: &[u8]) -> Result<Vec<Bytes>> {
         let guard = self.acquire_lock()?;
         guard
