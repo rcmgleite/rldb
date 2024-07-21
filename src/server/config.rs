@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub struct Config {
     pub port: u16,
-    pub partitioning_scheme: PartitioningScheme,
     pub quorum: Quorum,
     pub heartbeat: Heartbeat,
 }
@@ -40,17 +39,11 @@ pub struct Heartbeat {
     pub interval: usize,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PartitioningScheme {
-    ConsistentHashing,
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use crate::server::config::{Heartbeat, PartitioningScheme, Quorum};
+    use crate::server::config::{Heartbeat, Quorum};
 
     use super::Config;
 
@@ -67,7 +60,6 @@ mod tests {
             config,
             Config {
                 port: 3001,
-                partitioning_scheme: PartitioningScheme::ConsistentHashing,
                 quorum: Quorum {
                     replicas: 3,
                     reads: 2,

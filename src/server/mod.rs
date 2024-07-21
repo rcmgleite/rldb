@@ -61,13 +61,11 @@ impl Server {
 
             // configure the partitioning_scheme. This step already
             // includes the node itself to the ring.
-            let cluster_state = match config.partitioning_scheme {
-                config::PartitioningScheme::ConsistentHashing => Arc::new(State::new(
-                    Box::<ConsistentHashing>::default(),
-                    client_listener.local_addr().unwrap().to_string().into(),
-                    config.quorum,
-                )?),
-            };
+            let cluster_state = Arc::new(State::new(
+                Box::<ConsistentHashing>::default(),
+                client_listener.local_addr().unwrap().to_string().into(),
+                config.quorum,
+            )?);
 
             // FIXME: There's a big problem here - if this task exists how will
             // the node know that it has to shutdown? Something to be fixed soon...
